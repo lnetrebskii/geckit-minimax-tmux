@@ -29,7 +29,7 @@ export function create(context = {}, dependencies = {}) {
   return {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
     loginCommand: 'mcode login', planName: 'MiniMax', localOnly: true,
-    available: true, subscriptionOnly: false, images: false, remoteControl: false, nativeGoals: false,
+    available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: false,
     idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async () => {},
     program: dependencies.program ?? program,
     account: async () => {

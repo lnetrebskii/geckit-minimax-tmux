@@ -38,11 +38,13 @@ if (args.includes('app-server')) {
 }
 const id = args[args.indexOf('--session') + 1];
 get(id);
+let attachments = [], pasteStart = 0;
 let input = '', pasting = false, busy = false, permission = false, timer;
 const paint = (body) => process.stdout.write('\x1b[2J\x1b[H' + body);
 const prompt = '    ───────────────────────────────────\n  › Ask Mcode to do anything\n    ───────────────────────────────────\n  project │ Auto │ ✦ Test │ Context 512K\n';
-const idle = () => paint('Message · Enter send · Ctrl+J newline\n' + prompt);
-const working = () => paint('⠋ Working · Esc interrupt\n' + prompt);
+const imageLabels = () => prompt.replace('Ask Mcode to do anything', attachments.length ? attachments.map((_, i) => `[Image #${i + 1}]`).join(' ') : 'Ask Mcode to do anything');
+const idle = () => paint('[Image #1] from a previous turn\nMessage · Enter send · Ctrl+J newline\n' + imageLabels());
+const working = () => paint('[Image #1] from a previous turn\n⠋ Working · Esc interrupt\n' + imageLabels());
 const message = (role, text) => {
   const data = get(id);
   data.messages.push({ msg_id: randomUUID(), role, msg_content: text, timestamp: Date.now(), ...(role === 'assistant' ? { finish_reason: 'stop', usage: { input_tokens: 100, output_tokens: 10, context_window: 512000 } } : {}) });
@@ -52,6 +54,7 @@ const active = (value) => { const data = get(id); data.active = value; save(data
 const reply = (text) => { message('assistant', text); active(false); idle(); };
 const submit = (text) => {
   if (text.startsWith('/permission ') || text.startsWith('/plan ')) { idle(); return; }
+  if (attachments.length) { const data = get(id); data.receivedImages = attachments.map(path => ({ path, data: readFileSync(path).toString('base64') })); save(data); attachments = []; }
   message('user', text); active(true); working();
   if (text === 'hold') return;
   if (text === 'permission') { permission = true; paint('╭─ ◆ Approval required ─╮\nRun this command?\n  › 1 Allow for this conversation\n    2 Always allow matching actions\n    3 Deny and guide MCode\nEnter select · Esc cancel\n'); return; }
@@ -62,8 +65,8 @@ process.stdin.setRawMode(true); process.stdin.resume(); process.stdout.write('\x
 process.stdin.on('data', (bytes) => {
   let data = bytes.toString();
   while (data.length) {
-    if (data.startsWith('\x1b[200~')) { pasting = true; data = data.slice(6); continue; }
-    if (data.startsWith('\x1b[201~')) { pasting = false; data = data.slice(6); continue; }
+    if (data.startsWith('\x1b[200~')) { pasting = true; pasteStart = input.length; data = data.slice(6); continue; }
+    if (data.startsWith('\x1b[201~')) { pasting = false; data = data.slice(6); const pasted = input.slice(pasteStart); if (/^\/.*\.(png|jpg|gif|webp)$/.test(pasted) && existsSync(pasted)) { input = input.slice(0, pasteStart); setTimeout(() => { attachments.push(pasted); busy ? working() : idle(); }, 180); } continue; }
     const char = data[0]; data = data.slice(1);
     if (pasting) { input += char; continue; }
     if (char === '\x1b') { clearTimeout(timer); permission = false; active(false); idle(); continue; }

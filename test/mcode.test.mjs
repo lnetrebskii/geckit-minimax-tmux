@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, writeFile, chmod, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, stat, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -65,12 +65,26 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.equal(ended()[0].how, 'done');
     const history = await p.read(directory, id);
     assert.equal(history.items[0].text, prompt); assert.equal(history.items[1].text, 'answer: ' + prompt);
+    assert.equal(p.images, true);
+    assert.throws(() => driver.send('bad', [{ media: 'text/plain', data: 'YQ==' }]), /Image attachments/);
+    const pictures = [{ media: 'image/png', data: 'aW1hZ2Ux' }, { media: 'image/jpeg', data: 'aW1hZ2Uy' }];
+    driver.send('', pictures); await until(() => ended().length === 2);
+    const received = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).receivedImages;
+    assert.deepEqual(received.map(image => image.data), pictures.map(image => image.data));
+    for (const image of received) assert.equal((await stat(image.path)).mode & 0o777, 0o600);
     driver.send('permission'); await until(() => events.some((event) => event.signals.some((signal) => signal.kind === 'asks')));
     const ask = events.flatMap((event) => event.signals).findLast((signal) => signal.kind === 'asks');
-    driver.answer(ask.ask, ask.wanted.choices[0]); await until(() => ended().length === 2);
-    driver.send('hold'); await delay(700); await driver.inject('guidance'); await until(() => ended().length === 3);
-    driver.send('hold'); await delay(700); driver.stop(); await until(() => ended().length === 4); assert.equal(ended()[3].how, 'stopped');
+    const card = events.flatMap(event => event.items).find(item => item.id === `card:${ask.ask}`);
+    assert.equal(card.card.title.includes('\n'), false);
+    assert.match(card.card.detail, /Run this command/);
+    await assert.rejects(driver.inject('blocked', pictures), /cannot accept guidance/);
+    driver.answer(ask.ask, ask.wanted.choices[0]); await until(() => ended().length === 3);
+    driver.send('hold'); await delay(700); await driver.inject('guidance', pictures); await until(() => ended().length === 4);
+    const guided = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).receivedImages;
+    assert.deepEqual(guided.map(image => image.data), pictures.map(image => image.data));
+    driver.send('hold'); await delay(700); driver.stop(); await until(() => ended().length === 5); assert.equal(ended()[4].how, 'stopped');
     await driver.end(); assert.equal(closed, 1);
+    for (const image of [...received, ...guided]) await assert.rejects(stat(image.path), { code: 'ENOENT' });
     const next = []; resumed = p.hold({ id, root: directory, resume: true }, (event) => next.push(event), () => {});
     resumed.send('followup'); await until(() => next.some((event) => event.signals.some((signal) => signal.kind === 'ended' && signal.how === 'done')));
     resumed.send('crash'); await until(() => next.some((event) => event.signals.some((signal) => signal.kind === 'ended' && signal.how === 'failed')));
@@ -81,4 +95,28 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('approval cards isolate evidence, preserve pipes and ignore transcript changes', () => {
+  const frame = `╭─ ◆ Approval required ─ Bash ─╮
+│ Run this command?            │
+│ $ cat file | sort            │
+│ Why · Needs confirmation     │
+│ Details 6 of 47 lines · Ctrl+E review all │
+│ › 1 Allow for this conversation │
+│     MCode asks again in a new conversation │
+│   2 Always allow matching actions │
+│   3 Deny and guide MCode      │
+├──────────────────────────────┤
+│ ↑/↓ choose · Enter confirm · Esc deny │
+╰──────────────────────────────╯
+project | Auto | Context 48% left`;
+  const parsed = terminalScreen('Old transcript\n' + frame);
+  assert.equal(parsed.kind, 'question');
+  assert.match(parsed.detail, /cat file \| sort/);
+  assert.doesNotMatch(parsed.detail, /Old transcript|project|MCode asks again|[│╭╰]|Enter confirm/);
+  assert.equal(parsed.options[0].label, 'Allow for this conversation');
+  assert.deepEqual(parsed.options.at(-1).keys, ['C-e']);
+  assert.equal(parsed.signature, terminalScreen('Changed transcript\n' + frame).signature);
+  assert.equal(parsed.title.includes('\n'), false);
 });

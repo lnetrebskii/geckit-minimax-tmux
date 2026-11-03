@@ -16,7 +16,7 @@ The plugin finds `mcode` on PATH and in `~/.minimax-code/bin` or `~/.local/bin`.
 
 ## How it works
 
-Each conversation opens `mcode --session <native-id> --tui-mode regular` in a uniquely named `geckit-minimax-*` tmux session. Prompts are pasted using private tmux buffers with bracketed paste; Unicode, multiline input and literal shell characters are preserved. The system clipboard is not used. Follow-up messages reuse the same terminal. **Send now** delivers guidance through MCode's active input and rejects delivery while a question is pending.
+Each conversation opens `mcode --session <native-id> --tui-mode regular` in a uniquely named `geckit-minimax-*` tmux session. Prompts are pasted using private tmux buffers with bracketed paste; Unicode, multiline input and literal shell characters are preserved. PNG, JPEG, GIF and WebP attachments are written to private temporary files and pasted as standalone paths using MCode’s native file attachment handler. The plugin waits for each image placeholder before submitting the message and removes its temporary files when the driver closes. The system clipboard is not used. Follow-up messages reuse the same terminal. **Send now** delivers guidance through MCode's active input and rejects delivery while a question is pending.
 
 A plugin-owned `mcode app-server --stdio` process provides native session creation, model/account information, and saved history through the local DesktopService protocol. It does not send model prompts. Replies and tool records come from native saved messages, not reconstructed terminal text. The plugin does not extract or copy OAuth tokens and does not modify the CLI's instructions.
 
@@ -29,8 +29,8 @@ GeckIt's Manual/Auto/Plan selection is applied using MCode's native `/permission
 ## Limits and troubleshooting
 
 - Local projects only; Windows and SSH projects are unsupported.
-- Image attachments, native goal management, correction, and browser/MCP configuration from GeckIt's settings are not advertised. Tools and MCP already configured in MCode still work inside the native agent.
-- Unknown terminal dialogs remain open for manual handling. Attach with `tmux attach -t <geckit-minimax-session-name>`; list sessions with `tmux list-sessions`. Known permission and questionnaire layouts are surfaced as GeckIt question cards. A changed CLI layout may require an adapter update.
+- Native goal management, correction, and browser/MCP configuration from GeckIt's settings are not advertised. Tools and MCP already configured in MCode still work inside the native agent.
+- Unknown terminal dialogs remain open for manual handling. Attach with `tmux attach -t <geckit-minimax-session-name>`; list sessions with `tmux list-sessions`. Known permission and questionnaire layouts are surfaced as GeckIt question cards with separate multiline details and answer buttons. Truncated approval details offer a “Review all details” action. A changed CLI layout may require an adapter update.
 - If login expires, run `mcode login` in your terminal and retry. Do not provide an API key to this plugin.
 - The tmux download mechanism supports verified release assets, but this repository initially ships an empty binary catalog. Install tmux locally unless a later release adds your platform's binary.
 - GeckIt diagnostic events contain session IDs and outcomes, not prompts, responses or credentials.
@@ -45,6 +45,6 @@ npm run build
 npm test
 ```
 
-Tests run a fake native MCode CLI and app-server inside isolated real tmux sessions, without a model account or API call. They cover namespace validation, history pagination, context, models, terminal states, exact multiline delivery, permissions, guidance, Stop, resume, process exit and disposal, plus tmux discovery and checksum handling. Commit the rebuilt `index.mjs` with source changes.
+Tests run a fake native MCode CLI and app-server inside isolated real tmux sessions, without a model account or API call. They cover namespace validation, history pagination, context, models, terminal states, exact multiline delivery, image attachment delivery and cleanup, isolated permission details, permissions, guidance, Stop, resume, process exit and disposal, plus tmux discovery and checksum handling. Commit the rebuilt `index.mjs` with source changes.
 
 See [UPSTREAM.md](UPSTREAM.md) for provenance and [LICENSE](LICENSE) for terms.

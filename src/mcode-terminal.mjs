@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { findTmux } from './tmux-binary.mjs';
@@ -13,19 +16,26 @@ export function terminalScreen(text) {
   const prompt = lines.findLastIndex((line, index) => /^\s*›\s/.test(line) && border(lines[index - 1]) && border(lines[index + 1]));
   const approvalAt = lines.findLastIndex((line) => /◆ Approval required|Always allow matching actions\?|Deny this action\?/.test(line));
   const approval = approvalAt !== -1 && (prompt === -1 || approvalAt > prompt);
-  if (approval && /Always allow matching actions\?/.test(body)) return question(body.trim(), [{ label: 'Always allow matching actions', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }]);
-  if (approval && /Deny this action\?/.test(body)) return question(body.trim(), [{ label: 'Deny', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }], true);
+  const approvalLines = approval ? dialogLines(lines.slice(approvalAt)) : [];
+  const approvalText = approvalLines.join('\n');
+  if (approval && /Always allow matching actions\?/.test(approvalText)) return question(dialogTitle(approvalLines), [{ label: 'Always allow matching actions', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }]);
+  if (approval && /Deny this action\?/.test(approvalText)) return question(dialogTitle(approvalLines), [{ label: 'Deny', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }], true);
   if (approval) {
-    const choices = lines.map((line) => /^\s*[│┃]?\s*(?:›\s*)?([123])\s+((?:Allow for this conversation|Always allow matching actions|Deny and guide MCode).*)/.exec(line)).filter(Boolean);
-    if (choices.length) return question(body.trim(), choices.map((one) => ({ label: one[2].replace(/\s*[│┃]\s*$/, '').trim(), keys: [one[1]] })));
+    const choices = approvalLines.map((line) => /^\s*[│┃]?\s*(?:›\s*)?([123])\s+(Allow for this conversation|Always allow matching actions|Deny and guide MCode)\b/.exec(line)).filter(Boolean);
+    if (choices.length) {
+      const options = choices.map((one) => ({ label: one[2], keys: [one[1]] }));
+      if (/Ctrl\+E review all/.test(approvalText)) options.push({ label: 'Review all details', keys: ['C-e'] });
+      return question(dialogTitle(approvalLines.slice(0, approvalLines.findIndex((line) => /^\s*(?:›\s*)?[123]\s+(?:Allow|Always|Deny)/.test(line)))), options);
+    }
   }
   const askAt = lines.findLastIndex((line) => /[╭┌].*\bAsk\b/.test(line));
   if (askAt !== -1 && (prompt === -1 || askAt > prompt)) {
-    const frame = lines.slice(askAt).join('\n');
-    if (/Type your answer · Enter (?:send|next)/.test(frame)) return question(frame.trim(), [], true);
+    const askLines = dialogLines(lines.slice(askAt));
+    const frame = askLines.join('\n');
+    if (/Type your answer · Enter (?:send|next)/.test(frame)) return question(dialogTitle(askLines), [], true);
     if (/↑↓ move|Space toggle/.test(frame)) {
       const multiple = /Space toggle/.test(frame);
-      const options = lines.slice(askAt).flatMap((line) => {
+      const options = askLines.flatMap((line) => {
         const match = /^\s*[│┃]?\s*(?:[›→]\s*)?(?:([●○])\s*)?([1-9])\s{1,}(.+?)\s*[│┃]?\s*$/.exec(line);
         return match ? [{ label: `${match[1] ? `${match[1]} ` : ''}${match[3].trim()}`, keys: [match[2]] }] : [];
       });
@@ -33,7 +43,7 @@ export function terminalScreen(text) {
       if (/Other…/.test(frame) && !options.some((option) => option.label.includes('Other…'))) options.push({ label: 'Other…', keys: ['o'] });
       if (/more below/.test(frame)) options.push({ label: 'More options', keys: ['Down'] });
       if (/more above/.test(frame)) options.push({ label: 'Previous options', keys: ['Up'] });
-      if (options.length) return question(frame.trim(), options);
+      if (options.length) return question(dialogTitle(askLines), options);
     }
   }
   // Unsupported native dialogs remain visible in the attached terminal and
@@ -42,13 +52,28 @@ export function terminalScreen(text) {
   const working = /Esc (?:interrupt|to interrupt|stop)|esc (?:interrupt|to interrupt|stop)|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/.test(status);
   return { kind: working ? 'working' : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? 'idle' : 'unknown', text: body };
 }
-function question(title, options, input = false) { return { kind: 'question', title, options, input, signature: JSON.stringify({ title, options }) }; }
+// Keep terminal history and frame borders out of the active question.
+function dialogLines(lines) {
+  const end = lines.findIndex((line) => /^\s*[╰└]/.test(line));
+  return (end < 0 ? lines : lines.slice(0, end)).map((line) => line
+    .replace(/^\s*[╭┌][─━ ]*/, '').replace(/[─━ ]*[╮┐]\s*$/, '')
+    .replace(/^\s*[│┃] ?/, '').replace(/\s*[│┃]\s*$/, '').trimEnd())
+    .filter((line) => !/^\s*[─━├┤┬┴]{3}/.test(line));
+}
+function dialogTitle(lines) {
+  return lines.filter((line) => !/^\s*(?:↑|Enter |Type your answer|Space toggle)/.test(line)).join('\n').trim();
+}
+
+function question(detail, options, input = false) {
+  const title = detail.split('\n').find((line) => line.trim()) ?? 'MCode question';
+  return { kind: 'question', title, detail, options, input, signature: JSON.stringify({ detail, options, input }) };
+}
 
 export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
   if (process.platform === 'win32' || options.root.startsWith('ssh://')) throw new Error('MCode tmux requires a local macOS or Linux project.');
   const name = `geckit-minimax-${randomUUID().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false;
+  let checking = false, imagesDirectory;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
   const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
   const tmux = async (args, input) => {
@@ -66,7 +91,10 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
   const showQuestion = (value) => {
     if (pending?.signature === value.signature) return;
     resolveQuestion(); pending = { ...value, id: `mcode-question:${randomUUID()}` };
-    emit([], [], [{ kind: 'asks', ask: pending.id, wanted: { kind: 'question', question: value.title, choices: value.options.map((option) => option.label) } }]);
+    emit([], [], [{ kind: 'asks', ask: pending.id, wanted: { kind: 'question', question: value.detail, choices: value.options.map((option) => option.label) } }]);
+    // The host's question title is plain text; use its code/detail field for
+    // multiline evidence instead of flattening the whole terminal into a title.
+    emit([{ kind: 'card', id: `card:${pending.id}`, card: { kind: 'question', title: value.title, detail: value.detail, choices: value.options.map((option) => option.label) } }]);
   };
   const refresh = async () => {
     const saved = await messages(rpc, options.id);
@@ -97,6 +125,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
       await tmux(['kill-session', '-t', name]).catch(() => {});
     }
     running = false;
+    if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
     left(); log('info', 'session.closed', { session: options.id });
   };
   const poll = async () => {
@@ -150,19 +179,50 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
     }
     throw new Error(`MCode is waiting in its terminal. Attach with: tmux attach -t ${name}`);
   };
-  const paste = async (text, guard) => {
+  const paste = async (text, guard, submit = true) => {
+    if (!text) {
+      await guard();
+      if (submit) await tmux(['send-keys', '-t', name, 'Enter']);
+      return;
+    }
     const buffer = `geckit-minimax-${randomUUID()}`;
     try {
       await guard(); await tmux(['load-buffer', '-b', buffer, '-'], text);
       await guard(); await tmux(['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', name]);
-      await delay(100); await guard(); await tmux(['send-keys', '-t', name, 'Enter']);
+      await delay(100); await guard(); if (submit) await tmux(['send-keys', '-t', name, 'Enter']);
     } finally { await tmux(['delete-buffer', '-b', buffer]).catch(() => {}); }
   };
   const input = (text, images, before) => {
-    if (images?.length) throw new Error('MCode tmux image attachments are not supported yet.');
+    validateImages(images);
     const prompt = [...(before ?? []), text].join('\n\n');
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(prompt)) throw new Error('Terminal control characters are not allowed in prompts.');
     return prompt;
+  };
+  const attach = async (images, guard) => {
+    if (!images.length) return;
+    imagesDirectory ??= await mkdtemp(join(tmpdir(), 'geckit-mcode-images-'));
+    const capture = () => tmux(['capture-pane', '-p', '-t', name]);
+    const numbers = (text) => {
+      const lines = text.split('\n');
+      const editor = lines.findLastIndex((line) => /^\s*›\s/.test(line));
+      // Earlier turns also contain [Image #1]; only inspect the current draft.
+      return editor < 0 ? [] : [...lines.slice(editor).join('\n').matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1]));
+    };
+    for (const image of images) {
+      const previous = new Set(numbers(await capture()));
+      const path = join(imagesDirectory, `${randomUUID()}.${imageExtensions[image.media]}`);
+      await writeFile(path, Buffer.from(image.data, 'base64'), { mode: 0o600, flag: 'wx' });
+      // MCode recognizes a standalone bracketed-pasted absolute path as an
+      // attachment. Wait for its asynchronous resolver before sending Enter.
+      await paste(path, guard, false);
+      let attached = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await guard();
+        if (numbers(await capture()).some((number) => !previous.has(number))) { attached = true; break; }
+        await delay(100);
+      }
+      if (!attached) throw new Error('MCode did not accept the image attachment.');
+    }
   };
   const driver = {
     send(text, images = [], before = []) {
@@ -182,7 +242,9 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
           await delay(350); await ready();
         }
         baseline = new Set((await refresh()).map((message) => message.msg_id));
-        await paste(prompt, async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); });
+        const guard = async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); };
+        await attach(images, guard);
+        await paste(prompt, guard);
         log('info', 'message.sent', { session: options.id, delivery: 'send' });
       })().catch(async (error) => { finish(stopping ? 'stopped' : 'failed', error.message); await close(); }).finally(() => { submitting = false; });
     },
@@ -191,7 +253,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
       const prompt = input(text, images, before);
       submitting = true;
       const guard = async () => { if (closed || !turn || stopping || !await alive() || (await screen()).kind !== 'working') throw new Error('MCode is no longer ready for guidance.'); };
-      try { await paste(prompt, guard); log('info', 'message.sent', { session: options.id, delivery: 'inject' }); }
+      try { await attach(images, guard); await paste(prompt, guard); log('info', 'message.sent', { session: options.id, delivery: 'inject' }); }
       catch (error) { const shown = await screen().catch(() => ({})); if (shown.kind === 'idle' || shown.kind === 'working') await tmux(['send-keys', '-t', name, 'C-u']).catch(() => {}); throw error; }
       finally { submitting = false; }
     },
@@ -212,4 +274,15 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
     end: close,
   };
   return driver;
+}
+
+const imageExtensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+function validateImages(images = []) {
+  for (const image of images) {
+    if (!Object.hasOwn(imageExtensions, image?.media) || typeof image.data !== 'string' || !image.data.length ||
+        image.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(image.data) ||
+        Buffer.from(image.data, 'base64').toString('base64') !== image.data) {
+      throw new Error('Image attachments must contain PNG, JPEG, GIF or WebP base64 data.');
+    }
+  }
 }
