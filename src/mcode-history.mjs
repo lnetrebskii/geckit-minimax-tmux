@@ -1,3 +1,5 @@
+import { open } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 export const API = '/minimax-desktop/api/v1';
 export const ID = 'plugin:minimax-tmux';
 export const namespaced = (id) => {
@@ -13,10 +15,68 @@ export function messageItems(message) {
   if (typeof id !== 'string') return [];
   const items = [];
   const timestamp = message.timestamp == null ? undefined : Number(message.timestamp);
-  if (message.msg_content) items.push({ kind: message.role === 'user' ? 'mine' : message.role === 'assistant' ? 'theirs' : 'note', id,
-    text: message.msg_content, ...(message.role === 'user' || message.role === 'assistant' ? Number.isFinite(timestamp) ? { at: timestamp } : {} : { note: 'task' }) });
+  if (message.msg_content || (message.role === 'user' && message.attachments?.length)) items.push({ kind: message.role === 'user' ? 'mine' : message.role === 'assistant' ? 'theirs' : 'note', id,
+    text: message.msg_content || '', ...(message.role === 'user' || message.role === 'assistant' ? Number.isFinite(timestamp) ? { at: timestamp } : {} : { note: 'task' }) });
   if (message.thinking_content) items.push({ kind: 'thought', id: `${id}:thinking`, text: message.thinking_content });
   for (const [index, tool] of (message.tool_calls ?? []).entries()) items.push({ kind: 'did', id: `${id}:tool:${tool.tool_call_id ?? tool.id ?? index}`, what: tool.tool_name ?? tool.name ?? tool.function?.name ?? 'Tool', detail: JSON.stringify(tool, null, 2), live: tool.tool_call_status === 1 });
+  return items;
+}
+
+const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const maxImageBytes = 20 * 1024 * 1024;
+function verifiedImage(media, data) {
+  if (!imageTypes.has(media) || typeof data !== 'string' || data.length > maxImageBytes * 4 / 3 + 4) return;
+  const bytes = Buffer.from(data, 'base64');
+  if (!bytes.length || bytes.toString('base64') !== data) return;
+  const valid = media === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+    : media === 'image/jpeg' ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+    : media === 'image/gif' ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString())
+    : bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
+  if (valid) return { media, data };
+}
+async function attachmentImage(attachment) {
+  const url = attachment.local?.data_url;
+  if (typeof url === 'string') {
+    const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([\s\S]+)$/.exec(url);
+    return match && verifiedImage(match[1], match[2]);
+  }
+  const media = attachment.meta?.mime_type, path = attachment.local?.file_path;
+  if (!imageTypes.has(media) || typeof path !== 'string' || !isAbsolute(path)) return;
+  let file;
+  try {
+    file = await open(path, 'r');
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > maxImageBytes) return;
+    // Bounded read also handles files growing after stat().
+    const buffer = Buffer.alloc(stat.size);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    return verifiedImage(media, buffer.subarray(0, bytesRead).toString('base64'));
+  } catch { return undefined; }
+  finally { await file?.close(); }
+}
+export async function messageItemsWithImages(message, root) {
+  const items = messageItems(message);
+  const mine = items.find(item => item.kind === 'mine');
+  if (mine) {
+    const images = (await Promise.all((message.attachments ?? []).map(attachmentImage))).filter(Boolean);
+    if (images.length) mine.images = images;
+  }
+  for (const [index, tool] of (message.tool_calls ?? []).entries()) {
+    const item = items.find(item => item.id === `${message.msg_id}:tool:${tool.tool_call_id ?? tool.id ?? index}`);
+    let args, result;
+    try { args = JSON.parse(tool.tool_call_args ?? '{}'); } catch {}
+    try { result = JSON.parse(tool.tool_call_result_data ?? '{}'); } catch {}
+    const path = args?.file_path ?? args?.path;
+    if (typeof path === 'string') item.path = path;
+    if (root && typeof path === 'string' && ['write', 'edit'].includes(tool.tool_name) && tool.tool_call_status === 2 && !result?.error && result?.isError !== true) {
+      items.push({ kind: 'wrote', id: `${item.id}:wrote`, paths: [resolve(root, path)] });
+    }
+    const images = (Array.isArray(result?.content) ? result.content : []).flatMap(block => {
+      const image = block.type === 'image' ? verifiedImage(block.mimeType ?? block.source?.media_type, block.data ?? block.source?.data) : undefined;
+      return image ? [image] : [];
+    });
+    if (images.length) item.images = images;
+  }
   return items;
 }
 export function contextSpend(messages) {

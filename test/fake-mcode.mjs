@@ -21,6 +21,7 @@ if (args.includes('app-server')) {
     const id = url.pathname.match(/\/session\/(mvs_[a-z0-9]+)/)?.[1];
     let result = {}, status = 200;
     if (url.pathname.endsWith('/models/list')) result = { models: [{ provider_id: 'minimax', model_id: 'MiniMax-Test', display_name: 'Test', context_limit: 512000, max_output_tokens: 128000, selected: true }] };
+    else if (url.pathname.endsWith('/model-providers/minimax-source')) result = { active_source: 'token_plan' };
     else if (url.pathname.endsWith('/mcp/servers')) result = { servers: [{ name: 'test-server', enabled: true, transport: 'http' }] };
     else if (url.pathname.endsWith('/mcp/runtime/servers')) result = { servers: [{ name: 'test-server', transport: 'http', enabled: true, configured: true, auth_status: 'none' }], count: 1 };
     else if (url.pathname.endsWith('/agent/mavis/session') && frame.method === 'POST') {
@@ -30,6 +31,12 @@ if (args.includes('app-server')) {
     } else if (id && existsSync(path(id))) {
       const data = get(id);
       if (url.pathname.endsWith('/message')) result = { messages: data.messages, has_more: false };
+      else if (url.pathname.endsWith('/background-tasks')) result = { items: data.tasks ?? [] };
+      else if (url.pathname.includes('/background-tasks/')) {
+        const task = data.tasks?.find(task => task.task_id === url.pathname.split('/')[7]);
+        if (!task) status = 404;
+        else { if (url.pathname.endsWith('/stop')) { task.status = 5; task.ended_at = Date.now(); save(data); } result = { task }; }
+      }
       else if (url.pathname.endsWith('/activity')) result = { state: data.active ? 1 : 0, items: [] };
       else result = { session: data.session };
     } else status = 404;

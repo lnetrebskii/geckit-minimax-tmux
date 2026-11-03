@@ -124,6 +124,7 @@ export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxP
     },
     // The name of the plan, as MCode itself names it.
     label() { return cached?.label; },
+    measuredAt() { return cached?.measuredAt; },
     // Read the plan again, and say how long ago it was last read.
     async refresh() {
       if (Date.now() - lastRead < MINUTE) return cached;

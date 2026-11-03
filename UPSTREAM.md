@@ -15,3 +15,7 @@ GeckIt contract: https://github.com/anetrebskii/geckit/blob/main/docs/provider-p
 `test/fixtures/geckit-resume.mjs` contains the terminal resume-command formatter from the installed renderer on 2026-11-03, with provider lookup injected. `messageLinks` follows the same installed renderer’s `linksIn`/`linksInText` behavior for ordering, labels and eligible message kinds.
 
 `test/fixtures/geckit-contracts.json` snapshots comment-stripped public and related type declarations (63 contracts) from GeckIt commit `69ad36623228400acc4b2fa94a4368fb91033d3f`. Each entry records its source path and whole-source SHA-256. Host implementations are not imported at runtime. The full audit distinguishes optional omissions, host-owned content and missing integrations.
+
+## Native state follow-up (2026-11-03)
+
+MCode 0.7.4 DesktopService schemas were inspected locally for background-task summary/detail/status (0–6), output_file_path, model session_id selection, MiniMax token_plan/minimax_api_key source, AttachmentView and native write/edit tool statuses. These informed task/output/stop, billing, guide and image/state adapters. No credential-reveal endpoints are called. The 47-test suite uses isolated fixtures and tmux; native schema smoke checks were read-only. Remaining host goal/rename requirements and unsupported surfaces are documented in INTEGRATION-AUDIT.md.

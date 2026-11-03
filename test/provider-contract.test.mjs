@@ -24,6 +24,7 @@ function fixture() {
     async request(path, method = 'GET', body) {
       calls.push({ path, method, body });
       const url = new URL(path, 'http://fixture');
+      if (url.pathname === `${API}/models/select`) return {};
       if (url.pathname === `${API}/agent/mavis/session`) {
         if (method === 'POST') {
           rows.set('mvs_created', { session_id: 'mvs_created', workspace_dir: body.workspace_dir, created_at: 50, updated_at: 50 });
@@ -119,11 +120,12 @@ test('create/fork/rename/delete use native IDs and enforce ownership before muta
     await assert.rejects(f.provider.create({ root: '/repo', model: 'invalid' }), /provider\/model/);
     await f.provider.rename(id, 'Renamed');
     assert.equal(f.rows.get('mvs_one').title, 'Renamed');
-    const fork = await f.provider.fork('/repo', id, 12, 'manual');
+    const fork = await f.provider.fork('/repo', id, 12, 'manual', 'custom/model');
     assert.equal(fork.id, namespaced('mvs_fork'));
     assert.equal(fork.begun, true);
     assert.deepEqual(fork.items.map(item => item.id), ['u', 'a']);
     assert.equal(f.calls.find(call => call.path.endsWith('/fork')).body.assistant_message_id, 'a');
+    assert.deepEqual(f.calls.find(call => call.path.endsWith('/models/select')).body, {session_id: 'mvs_fork', provider_id: 'custom', model_id: 'model'});
     await assert.rejects(f.provider.fork('/repo', id, 5, 'manual'), /completed assistant/);
     await assert.rejects(f.provider.delete('/other', id), /project/);
     assert.ok(f.rows.has('mvs_one'));
@@ -140,8 +142,8 @@ test('unsupported contracts return honest empty/error results and startup remain
     assert.equal(f.provider.nativeGoals, false);
     assert.equal(f.provider.remoteControl, false);
     assert.equal(await f.provider.goal('/repo', namespaced('mvs_one')), undefined);
-    assert.equal(await f.provider.setGoal(namespaced('mvs_one'), 'goal'), undefined);
-    assert.equal(await f.provider.clearGoal(namespaced('mvs_one')), undefined);
+    await assert.rejects(f.provider.setGoal(namespaced('mvs_one'), 'goal'), /goal-driver/);
+    await assert.rejects(f.provider.clearGoal(namespaced('mvs_one')), /not managed/);
     assert.equal(await f.provider.browsers('/repo'), undefined);
     assert.equal(await f.provider.setInstructions(true, {}), undefined);
     await assert.rejects(f.provider.remote({}, true), /local/);
@@ -156,7 +158,7 @@ test('account absence and sign-out do not trigger a quota process', async () => 
   for (const installed of [undefined, { version: '0.7.4' }]) {
     const p = create({}, {
       program: async () => installed,
-      rpc: { account: async () => ({ state: 'unauthenticated' }), dispose() {} },
+      rpc: { account: async () => ({ state: 'unauthenticated' }), request: async () => ({ active_source: 'token_plan', models: [] }), dispose() {} },
       quota: { windows() { assert.fail('No quota read before authentication'); }, dispose() {} },
     });
     try {

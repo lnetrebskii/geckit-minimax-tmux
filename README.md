@@ -47,14 +47,14 @@ For the full behavioral audit, including missing integrations and the verificati
 | `resumeCommand` | Copy/open the native terminal continuation command: `mcode --session {id}` |
 | `hold` | The conversation in tmux, with permission and questionnaire cards, guidance while it works, Manual/Auto changes, and Stop |
 | `mcp` | The MCP servers MCode has, and switching them on and off |
-| `goal`, `setGoal`, `clearGoal` | Not offered: MCode keeps its own goals, and GeckIt is told so |
+| `goal`, `setGoal`, `clearGoal` | Native goals not advertised; unsupported mutations reject explicitly |
 | `browsers`, `correct`, `remote` | Not offered by this adapter |
-| `setInstructions` | No-op: global MCode instructions are left unchanged |
+| `setInstructions` | Scoped GeckIt guide for subsequent TUI launches; source-app overrides and Manager prompt preserved |
 
 ## Limits and troubleshooting
 
 - Local projects only; Windows and SSH projects are unsupported.
-- Background tasks, file-change events, saved images and native goal synchronization are not mapped into GeckIt. The GeckIt instruction switch currently has no effect; `setInstructions` is a no-op.
+- Background tasks/output/stop, local saved images, native write/edit paths, observed mode/model/effort and scoped instructions are mapped. Native goals still need a host lifecycle change; see the audit for remaining boundaries.
 - Native goal management, correction, and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
 - Publish the rebuilt bundle in a new commit on the source repository’s default branch. In GeckIt, check for library updates and apply the update; no app restart is required. Running conversations switch providers when safe. Copying local files alone does not make an update available: GeckIt compares Git commits.
 - Model pricing is unknown and omitted.

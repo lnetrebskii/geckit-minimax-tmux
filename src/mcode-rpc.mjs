@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -16,7 +16,9 @@ export function mcodeCommand() {
 }
 export const program = () => new Promise((resolve) => execFile(mcodeCommand(), ['--version'], { env: mcodeEnvironment(), timeout: 15000 }, (error, stdout) => {
   const version = stdout?.trim().match(/^\d+\.\d+\.\d+[^\s]*/)?.[0];
-  resolve(error || !version ? undefined : { version, path: mcodeCommand() });
+  let path = mcodeCommand();
+  try { path = realpathSync(path); } catch {}
+  resolve(error || !version ? undefined : { version, path });
 }));
 
 // MCode's local DesktopService control plane; prompts still go only through

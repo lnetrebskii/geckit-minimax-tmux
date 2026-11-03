@@ -125,7 +125,7 @@ test('MCP authorization and disabled states take precedence over configured stat
     calls.push({ path, method, body });
     if (method === 'PATCH') return {};
     if (path.endsWith('/runtime/servers')) return { servers: [
-      { name: 'oauth', configured: true, authStatus: 'pending_auth' },
+      { name: 'oauth', configured: true, auth_status: 'pending_auth' },
       { name: 'disabled', configured: true, authStatus: 'pending_auth' },
     ] };
     return { servers: [{ name: 'oauth' }, { name: 'disabled', enabled: false }, { name: 'unknown' }] };
@@ -189,6 +189,19 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.equal(startupArgs[startupArgs.indexOf('--append-system-prompt') + 1], managerPrompt);
     const history = await p.read(directory, id);
     assert.equal(history.items[0].text, prompt); assert.equal(history.items[1].text, 'answer: ' + prompt);
+    const sessionFile = join(directory, nativeId(id) + '.json');
+    const native = JSON.parse(await readFile(sessionFile));
+    const output = join(directory, 'task-output.log');
+    await writeFile(output, 'background output\n');
+    native.tasks = [{ task_id: 'task_one', owner_session_id: nativeId(id), display_name: 'watch', status: 1, created_at: 123, output_file_path: output }];
+    await writeFile(sessionFile, JSON.stringify(native));
+    await until(() => events.some(event => event.signals.some(signal => signal.kind === 'task' && signal.task.status === 'running')));
+    assert.equal((await p.read(directory, id)).tasks[0].output, output);
+    await driver.control({ subtype: 'stop_task', task_id: 'task_one' });
+    assert.ok(events.some(event => event.signals.some(signal => signal.kind === 'task' && signal.task.status === 'stopped')));
+    await assert.rejects(driver.control({ subtype: 'unknown' }), /Unsupported/);
+    assert.ok(events.some(event => event.signals.some(signal => signal.kind === 'mode' && signal.mode === 'auto')));
+    assert.ok(events.some(event => event.signals.some(signal => signal.kind === 'model' && signal.model === 'minimax/MiniMax-Test')));
     assert.equal(p.images, true);
     assert.throws(() => driver.send('bad', [{ media: 'text/plain', data: 'YQ==' }]), /Image attachments/);
     const pictures = [{ media: 'image/png', data: 'aW1hZ2Ux' }, { media: 'image/jpeg', data: 'aW1hZ2Uy' }];

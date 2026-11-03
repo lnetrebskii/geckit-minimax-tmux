@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { McodeRpc, program } from './mcode-rpc.mjs';
 import { holdMcode } from './mcode-terminal.mjs';
 import { quotaReader } from './mcode-quota.mjs';
-import { API, ID, nativeId, namespaced, messages, messageItems, contextSpend, sessions, providerRow, messageLinks } from './mcode-history.mjs';
+import { backgroundTasks, selectedModel, usesKey, quotaUsage, efforts } from './mcode-state.mjs';
+import { instructionGuide } from './mcode-guide.mjs';
+import { API, ID, nativeId, namespaced, messages, messageItemsWithImages, contextSpend, sessions, providerRow, messageLinks } from './mcode-history.mjs';
 
 const local = (root) => typeof root === 'string' && !root.startsWith('ssh://');
 const inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, '') + '/');
@@ -25,6 +27,7 @@ export function create(context = {}, dependencies = {}) {
   const drivers = new Set();
   let disposed = false, known = [], reported;
   const quota = dependencies.quota ?? quotaReader({ log });
+  const guide = dependencies.guide ?? instructionGuide();
   const info = async (root, id) => {
     const native = nativeId(id);
     const session = (await rpc.request(`${API}/session/${native}`)).session;
@@ -34,22 +37,23 @@ export function create(context = {}, dependencies = {}) {
   const read = async (root, id) => {
     try { await info(root, id); } catch (error) { if (error.status === 404) return undefined; throw error; }
     const saved = await messages(rpc, nativeId(id));
-    return { items: saved.flatMap(messageItems), tasks: [], ...contextSpend(saved) };
+    return { items: (await Promise.all(saved.map(message => messageItemsWithImages(message, root)))).flat(), tasks: await backgroundTasks(rpc, nativeId(id)), ...contextSpend(saved) };
   };
   // The plan is the account's, so it is said once for every conversation.
   const reportPlan = async () => {
+    if (await usesKey(rpc, await selectedModel(rpc)) === true) return;
     const found = await quota.refresh();
     if (!found?.windows) return;
     const said = JSON.stringify(reported);
     reported = found.windows;
     if (said === JSON.stringify(found.windows)) return;
-    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: 'plan', plan: found.windows }] });
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: 'plan', plan: found.windows }, { kind: 'usage', usage: quotaUsage(found.windows, found.measuredAt) }] });
   };
-  return {
+  const provider = {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
     loginCommand: 'mcode login', resumeCommand: 'mcode --session {id}', planName: 'MiniMax', localOnly: true,
     available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: false,
-    idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async () => {},
+    idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async (enabled) => { guide.set(enabled); },
     program: dependencies.program ?? program,
     account: async () => {
       const installed = await (dependencies.program ?? program)();
@@ -57,10 +61,14 @@ export function create(context = {}, dependencies = {}) {
       const account = await rpc.account();
       const from = installFrom(installed.path);
       const program2 = { ...installed, ...(from === undefined ? {} : { from }) };
+      const model = await selectedModel(rpc);
+      const key = await usesKey(rpc, model);
+      if (key === true) return { provider: ID, here: true, signedIn: model?.enabled === true ? true : undefined, key, program: program2 };
       if (account.state !== 'authenticated') return { provider: ID, here: true, signedIn: false, program: program2 };
       const plan = await quota.windows();
       const label = quota.label();
       return { provider: ID, here: true, signedIn: true, program: program2,
+        ...(key === undefined ? {} : { key }), ...(plan === undefined ? {} : { usage: quotaUsage(plan, quota.measuredAt?.()) }),
         ...(plan === undefined || label === undefined ? {} : { plan: label }) };
     },
     models: async () => {
@@ -70,14 +78,18 @@ export function create(context = {}, dependencies = {}) {
         ...(model.enabled === false ? { disabled: true } : {}),
         ...(positive(model.context_limit) ? { contextWindow: Number(model.context_limit) } : {}),
         ...(positive(model.max_output_tokens) ? { maxOutputTokens: Number(model.max_output_tokens) } : {}),
+        ...(efforts.includes(model.default_effort) ? { defaultReasoning: model.default_effort } : {}),
         reasoning: (model.effort_options ?? []).filter((value) => ['none','minimal','low','medium','high','xhigh','max','ultra'].includes(value)).map((value) => ({ value, says: value })),
       }));
       return known;
     },
     limits: async (models) => {
+      if (!known.length && models.length) await provider.models();
       const windows = new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow]));
+      const selected = known.find(model => model.isDefault)?.value;
+      if (await usesKey(rpc, selected ? { provider_id: selected.split('/')[0] } : undefined) === true) return { windows };
       const plan = await quota.windows();
-      return { windows, ...(plan === undefined ? {} : { plan }) };
+      return { windows, ...(plan === undefined ? {} : { plan, ...quotaUsage(plan) }) };
     },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));
@@ -102,20 +114,24 @@ export function create(context = {}, dependencies = {}) {
       if (!result.session_id) throw new Error('MCode did not return a session ID.');
       return namespaced(result.session_id);
     },
-    fork: async (root, id, at) => {
+    fork: async (root, id, at, _mode, model) => {
       await info(root, id);
+      const selection = model ? modelSelection(model) : undefined;
       const saved = await messages(rpc, nativeId(id));
       const point = saved.findLast((message) => message.role === 'assistant' && Number(message.timestamp) <= at && message.actions?.fork === true);
       if (!point) throw new Error('MCode has no completed assistant response to fork at this point.');
       const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, 'POST', { assistant_message_id: point.msg_id, client_request_id: randomUUID(), use_suggested_title: false, create_isolated_worktree: false });
       if (!result.session?.session_id) throw new Error('MCode did not return the forked session.');
       const forkId = namespaced(result.session.session_id);
+      if (selection) await rpc.request(`${API}/models/select`, 'POST', { session_id: result.session.session_id, ...selection });
       return { id: forkId, begun: true, items: (await read(root, forkId)).items };
     },
     has: async (root, id) => { try { await info(root, id); return true; } catch (error) { if (error.status === 404) return false; throw error; } },
     read,
     links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
-    goal: async () => undefined, setGoal: async () => undefined, clearGoal: async () => {},
+    goal: async () => undefined,
+    setGoal: async () => { throw new Error('Native MCode goals need a GeckIt goal-driver lifecycle; this provider does not advertise nativeGoals.'); },
+    clearGoal: async () => { throw new Error('Native MCode goals are not managed by this provider.'); },
     rename: async (id, title) => { await rpc.request(`${API}/session/${nativeId(id)}`, 'PATCH', { title }); },
     remote: async () => { throw new Error('MCode tmux supports local projects only.'); },
     mcp: async (_root, change) => {
@@ -127,7 +143,7 @@ export function create(context = {}, dependencies = {}) {
         const state = states.get(server.name);
         const enabled = server.enabled !== false;
         const status = !enabled ? 'disabled'
-          : ['expired', 'pending_auth'].includes(state?.authStatus) ? 'needs-auth'
+          : ['expired', 'pending_auth'].includes(state?.auth_status ?? state?.authStatus) ? 'needs-auth'
           : state === undefined || state.configured === false ? 'pending' : 'connected';
         return { name: server.name, status };
       });
@@ -139,10 +155,10 @@ export function create(context = {}, dependencies = {}) {
       if (disposed) throw new Error('MCode provider disposed.');
       let driver;
       const report = (event) => {
-        if (event.signals?.some((signal) => signal.kind === 'ended')) void reportPlan();
+        if (event.signals?.some((signal) => signal.kind === 'ended')) void reportPlan().catch(error => log('warn', 'quota.refresh.failed', { error: error.name }));
         hear(event);
       };
-      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear: report, left: () => { drivers.delete(driver); left(); }, log, ...dependencies.terminal });
+      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, guide: () => guide.prompt(), hear: report, left: () => { drivers.delete(driver); left(); }, log, ...dependencies.terminal });
       driver.report = report;
       drivers.add(driver); return driver;
     },
@@ -152,4 +168,5 @@ export function create(context = {}, dependencies = {}) {
       void Promise.allSettled([...drivers].map((driver) => driver.end())).then(() => rpc.dispose());
     },
   };
+  return provider;
 }

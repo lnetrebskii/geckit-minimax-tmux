@@ -3,7 +3,7 @@ import { randomUUID as randomUUID4 } from "node:crypto";
 
 // src/mcode-rpc.mjs
 import { spawn, execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, delimiter } from "node:path";
 import { createInterface } from "node:readline";
@@ -17,9 +17,14 @@ function mcodeCommand() {
   if (process.env.GECKIT_MCODE_COMMAND) return process.env.GECKIT_MCODE_COMMAND;
   return mcodeEnvironment().PATH.split(delimiter).map((dir) => join(dir, "mcode")).find(existsSync) ?? "mcode";
 }
-var program = () => new Promise((resolve) => execFile(mcodeCommand(), ["--version"], { env: mcodeEnvironment(), timeout: 15e3 }, (error, stdout) => {
+var program = () => new Promise((resolve3) => execFile(mcodeCommand(), ["--version"], { env: mcodeEnvironment(), timeout: 15e3 }, (error, stdout) => {
   const version = stdout?.trim().match(/^\d+\.\d+\.\d+[^\s]*/)?.[0];
-  resolve(error || !version ? void 0 : { version, path: mcodeCommand() });
+  let path = mcodeCommand();
+  try {
+    path = realpathSync(path);
+  } catch {
+  }
+  resolve3(error || !version ? void 0 : { version, path });
 }));
 var McodeRpc = class {
   constructor({ command = mcodeCommand, environment = mcodeEnvironment, timeout = 6e4 } = {}) {
@@ -63,7 +68,7 @@ var McodeRpc = class {
     this.child.stdin.write(JSON.stringify(value) + "\n");
   }
   wait(map, id) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve3, reject) => {
       const timer = setTimeout(() => {
         map.delete(id);
         reject(new Error("MCode control request timed out."));
@@ -71,7 +76,7 @@ var McodeRpc = class {
       map.set(id, { resolve: (value) => {
         clearTimeout(timer);
         map.delete(id);
-        resolve(value);
+        resolve3(value);
       }, reject: (error) => {
         clearTimeout(timer);
         map.delete(id);
@@ -178,7 +183,7 @@ var McodeRpc = class {
 import { execFile as execFile3 } from "node:child_process";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join3, resolve as resolve2 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -189,8 +194,8 @@ import { mkdir as mkdirCache, readFile, rename, rm as rmPart, writeFile as write
 import { homedir as homedir2 } from "node:os";
 import { delimiter as delimiter2, join as join2 } from "node:path";
 var KNOWN = () => ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/home/linuxbrew/.linuxbrew/bin", join2(homedir2(), ".nix-profile", "bin"), "/run/current-system/sw/bin", "/nix/var/nix/profiles/default/bin", join2(homedir2(), ".local", "bin")];
-var tmuxRuns = (file) => new Promise((resolve) => {
-  execFile2(file, ["-V"], { timeout: 5e3, windowsHide: true }, (error) => resolve(error === null));
+var tmuxRuns = (file) => new Promise((resolve3) => {
+  execFile2(file, ["-V"], { timeout: 5e3, windowsHide: true }, (error) => resolve3(error === null));
 });
 var cacheFolder = (env) => process.platform === "darwin" ? join2(homedir2(), "Library", "Caches", "geckit-minimax-tmux") : join2(env.XDG_CACHE_HOME || join2(homedir2(), ".cache"), "geckit-minimax-tmux");
 var binaryList = () => readFile(new URL("./tmux-binaries.json", import.meta.url), "utf8").then(JSON.parse, () => ({ files: {} }));
@@ -236,6 +241,8 @@ var findTmux = () => located ??= locateTmux().catch((error) => {
 });
 
 // src/mcode-history.mjs
+import { open } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 var API = "/minimax-desktop/api/v1";
 var ID = "plugin:minimax-tmux";
 var namespaced = (id) => {
@@ -251,14 +258,76 @@ function messageItems(message) {
   if (typeof id !== "string") return [];
   const items = [];
   const timestamp = message.timestamp == null ? void 0 : Number(message.timestamp);
-  if (message.msg_content) items.push({
+  if (message.msg_content || message.role === "user" && message.attachments?.length) items.push({
     kind: message.role === "user" ? "mine" : message.role === "assistant" ? "theirs" : "note",
     id,
-    text: message.msg_content,
+    text: message.msg_content || "",
     ...message.role === "user" || message.role === "assistant" ? Number.isFinite(timestamp) ? { at: timestamp } : {} : { note: "task" }
   });
   if (message.thinking_content) items.push({ kind: "thought", id: `${id}:thinking`, text: message.thinking_content });
   for (const [index, tool] of (message.tool_calls ?? []).entries()) items.push({ kind: "did", id: `${id}:tool:${tool.tool_call_id ?? tool.id ?? index}`, what: tool.tool_name ?? tool.name ?? tool.function?.name ?? "Tool", detail: JSON.stringify(tool, null, 2), live: tool.tool_call_status === 1 });
+  return items;
+}
+var imageTypes = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+var maxImageBytes = 20 * 1024 * 1024;
+function verifiedImage(media, data) {
+  if (!imageTypes.has(media) || typeof data !== "string" || data.length > maxImageBytes * 4 / 3 + 4) return;
+  const bytes = Buffer.from(data, "base64");
+  if (!bytes.length || bytes.toString("base64") !== data) return;
+  const valid = media === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) : media === "image/jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : media === "image/gif" ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString()) : bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
+  if (valid) return { media, data };
+}
+async function attachmentImage(attachment) {
+  const url = attachment.local?.data_url;
+  if (typeof url === "string") {
+    const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([\s\S]+)$/.exec(url);
+    return match && verifiedImage(match[1], match[2]);
+  }
+  const media = attachment.meta?.mime_type, path = attachment.local?.file_path;
+  if (!imageTypes.has(media) || typeof path !== "string" || !isAbsolute(path)) return;
+  let file;
+  try {
+    file = await open(path, "r");
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > maxImageBytes) return;
+    const buffer = Buffer.alloc(stat.size);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    return verifiedImage(media, buffer.subarray(0, bytesRead).toString("base64"));
+  } catch {
+    return void 0;
+  } finally {
+    await file?.close();
+  }
+}
+async function messageItemsWithImages(message, root) {
+  const items = messageItems(message);
+  const mine = items.find((item) => item.kind === "mine");
+  if (mine) {
+    const images = (await Promise.all((message.attachments ?? []).map(attachmentImage))).filter(Boolean);
+    if (images.length) mine.images = images;
+  }
+  for (const [index, tool] of (message.tool_calls ?? []).entries()) {
+    const item = items.find((item2) => item2.id === `${message.msg_id}:tool:${tool.tool_call_id ?? tool.id ?? index}`);
+    let args, result;
+    try {
+      args = JSON.parse(tool.tool_call_args ?? "{}");
+    } catch {
+    }
+    try {
+      result = JSON.parse(tool.tool_call_result_data ?? "{}");
+    } catch {
+    }
+    const path = args?.file_path ?? args?.path;
+    if (typeof path === "string") item.path = path;
+    if (root && typeof path === "string" && ["write", "edit"].includes(tool.tool_name) && tool.tool_call_status === 2 && !result?.error && result?.isError !== true) {
+      items.push({ kind: "wrote", id: `${item.id}:wrote`, paths: [resolve(root, path)] });
+    }
+    const images = (Array.isArray(result?.content) ? result.content : []).flatMap((block) => {
+      const image = block.type === "image" ? verifiedImage(block.mimeType ?? block.source?.media_type, block.data ?? block.source?.data) : void 0;
+      return image ? [image] : [];
+    });
+    if (images.length) item.images = images;
+  }
   return items;
 }
 function contextSpend(messages2) {
@@ -330,6 +399,75 @@ var providerRow = (session) => ({
   ...session.effective_model ? { model: session.effective_model } : {}
 });
 
+// src/mcode-state.mjs
+import { isAbsolute as isAbsolute2 } from "node:path";
+import { fileURLToPath } from "node:url";
+var efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+async function selectedModel(rpc, id) {
+  const data = await rpc.request(`${API}/models/list${id ? `?session_id=${encodeURIComponent(id)}` : ""}`);
+  return data.models?.find((model) => model.selected === true);
+}
+async function usesKey(rpc, model) {
+  if (model?.provider_kind === "user") return true;
+  if (model?.provider_id && model.provider_id !== "minimax") return true;
+  const source = (await rpc.request(`${API}/model-providers/minimax-source`)).active_source;
+  return source === "minimax_api_key" ? true : source === "token_plan" ? false : void 0;
+}
+function taskView(task) {
+  if (!task || task.is_deleted || typeof task.task_id !== "string") return void 0;
+  const status = ["running", "running", "running", "completed", "failed", "stopped", "failed"][task.status];
+  const started = Number(task.started_at ?? task.created_at);
+  if (!status || !Number.isFinite(started)) return void 0;
+  let output = task.output_file_path;
+  if (output?.startsWith("file://")) {
+    try {
+      output = fileURLToPath(output);
+    } catch {
+      output = void 0;
+    }
+  }
+  return {
+    id: task.task_id,
+    kind: "local_bash",
+    what: task.display_name || "MCode background task",
+    status,
+    started,
+    ...typeof task.command === "string" ? { command: task.command } : {},
+    ...task.ended_at != null && Number.isFinite(Number(task.ended_at)) ? { ended: Number(task.ended_at) } : {},
+    ...Number.isInteger(task.exit_code) ? { exit: task.exit_code } : {},
+    ...typeof output === "string" && isAbsolute2(output) ? { output } : {}
+  };
+}
+async function backgroundTasks(rpc, id) {
+  const base = `${API}/session/${encodeURIComponent(id)}/background-tasks`;
+  const { items = [] } = await rpc.request(base);
+  const result = [];
+  for (const summary of items) {
+    if (summary.is_deleted) continue;
+    try {
+      const { task } = await rpc.request(`${base}/${encodeURIComponent(summary.task_id)}`);
+      const view = taskView(task);
+      if (view) result.push(view);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
+  return result;
+}
+async function stopTask(rpc, id, task) {
+  if (typeof task !== "string" || !task) throw new Error("Missing MCode task ID.");
+  const result = await rpc.request(`${API}/session/${encodeURIComponent(id)}/background-tasks/${encodeURIComponent(task)}/stop`, "POST", {});
+  if (result.operation_error) throw new Error(result.operation_error.message || "MCode could not stop this task.");
+  return result;
+}
+function quotaUsage(plan, measuredAt) {
+  if (!plan) return void 0;
+  return {
+    quotas: Object.entries(plan).map(([id, window]) => ({ id, name: id === "fiveHour" ? "5h" : id === "sevenDay" ? "Week" : id, ...window })),
+    ...Number.isFinite(measuredAt) ? { measuredAt } : {}
+  };
+}
+
 // src/mcode-terminal.mjs
 var quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 function terminalScreen(text) {
@@ -371,7 +509,13 @@ function terminalScreen(text) {
   }
   const status = prompt === -1 ? body : lines.slice(Math.max(0, prompt - 4), prompt).join("\n");
   const working = /Esc (?:interrupt|to interrupt|stop)|esc (?:interrupt|to interrupt|stop)|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/.test(status);
-  return { kind: working ? "working" : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? "idle" : "unknown", text: body };
+  const footer = prompt < 0 ? "" : lines.slice(prompt + 2).join("\n");
+  const mode = /[│|]\s*(Auto|Ask|Manual|Full|Plan)\s*[│|]/.exec(footer)?.[1];
+  return {
+    kind: working ? "working" : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? "idle" : "unknown",
+    text: body,
+    ...mode ? { mode: { Auto: "auto", Ask: "manual", Manual: "manual", Full: "bypassPermissions", Plan: "plan" }[mode] } : {}
+  };
 }
 function dialogLines(lines) {
   const end = lines.findIndex((line) => /^\s*[╰└]/.test(line));
@@ -384,7 +528,7 @@ function question(detail, options, input = false) {
   const title = detail.split("\n").find((line) => line.trim()) ?? "MCode question";
   return { kind: "question", title, detail, options, input, signature: JSON.stringify({ detail, options, input }) };
 }
-function holdMcode({ rpc, options, hear, left, log = () => {
+function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () => {
 }, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
   if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("MCode tmux requires a local macOS or Linux project.");
   if (options.launch || options.fork) throw new Error("MCode tmux requires local launch and a natively forked session.");
@@ -392,13 +536,14 @@ function holdMcode({ rpc, options, hear, left, log = () => {
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
   let checking = false, imagesDirectory, wanted, applying, closing;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
+  let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = /* @__PURE__ */ new Map();
   const emit = (items = [], gone = [], signals = []) => {
     if (!closed) hear({ items, gone, signals });
   };
   const tmux = async (args, input2) => {
     const { file, server } = await tmuxProgram();
-    return new Promise((resolve, reject) => {
-      const child = execFile3(file, [...server, ...args], { env: environment(), timeout: 1e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
+    return new Promise((resolve3, reject) => {
+      const child = execFile3(file, [...server, ...args], { env: environment(), timeout: 1e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve3(out));
       if (input2 !== void 0) child.stdin.end(input2);
     });
   };
@@ -419,15 +564,45 @@ function holdMcode({ rpc, options, hear, left, log = () => {
   };
   const refresh = async () => {
     const saved = await messages(rpc, options.id);
-    const items = saved.flatMap(messageItems);
+    const items = (await Promise.all(saved.map((message) => messageItemsWithImages(message, options.root)))).flat();
     const current = new Map(items.map((item) => [item.id, JSON.stringify(item)]));
     const changed = items.filter((item) => previous.get(item.id) !== current.get(item.id));
     const gone = [...previous.keys()].filter((id) => !current.has(id));
     if (turn && saved.some((message) => !baseline.has(message.msg_id))) activity = true;
     const spend = contextSpend(saved);
     emit(changed, gone, spend ? [{ kind: "spend", ...spend }] : []);
+    const doing = changed.findLast((item) => item.kind === "did" && item.live);
+    if (doing) emit([], [], [{ kind: "doing", what: doing.what }]);
+    const paths = changed.filter((item) => item.kind === "did" && item.live && ["write", "edit"].includes(item.what) && item.path).map((item) => resolve2(options.root, item.path));
+    if (paths.length) emit([], [], [{ kind: "writing", paths }]);
+    const said = changed.findLast((item) => item.kind === "theirs");
+    if (said) emit([], [], [{ kind: "said", text: said.text }]);
     previous = current;
     return saved;
+  };
+  const refreshState = async () => {
+    if (Date.now() - stateAt < 3e3) return;
+    stateAt = Date.now();
+    const results = await Promise.allSettled([backgroundTasks(rpc, options.id), selectedModel(rpc, options.id)]);
+    if (results[0].status === "fulfilled") for (const task of results[0].value) {
+      const value = JSON.stringify(task);
+      if (taskStates.get(task.id) !== value) emit([], [], [{ kind: "task", task }]);
+      taskStates.set(task.id, value);
+    }
+    if (results[1].status === "fulfilled") {
+      const selected = results[1].value;
+      const model = selected && `${selected.provider_id}/${selected.model_id}`;
+      const effort = selected?.thinking?.effort;
+      if (model && model !== actualModel) {
+        actualModel = model;
+        emit([], [], [{ kind: "model", model }]);
+      }
+      if (efforts.includes(effort) && effort !== actualEffort) {
+        actualEffort = effort;
+        emit([], [], [{ kind: "reasoning", effort }]);
+      }
+    }
+    for (const result of results) if (result.status === "rejected") log("warn", "session.state.failed", { error: result.reason.name });
   };
   const finish = (how, text) => {
     if (!turn) return;
@@ -471,7 +646,12 @@ function holdMcode({ rpc, options, hear, left, log = () => {
       return;
     }
     const saved = await refresh();
+    await refreshState();
     const shown = await screen();
+    if (shown.mode && shown.mode !== actualMode) {
+      actualMode = shown.mode;
+      emit([], [], [{ kind: "mode", mode: actualMode }]);
+    }
     if (shown.kind === "question") {
       activity = true;
       idle = 0;
@@ -479,7 +659,14 @@ function holdMcode({ rpc, options, hear, left, log = () => {
       return;
     }
     resolveQuestion();
-    if (shown.kind === "working") activity = true;
+    if (shown.kind === "working") {
+      if (!turn) {
+        baseline = new Set(saved.map((message) => message.msg_id));
+        turn = true;
+        emit([], [], [{ kind: "begun" }]);
+      }
+      activity = true;
+    }
     if (turn && (activity || stopping) && shown.kind === "idle") {
       const native = await rpc.request(`${API}/session/${options.id}/activity`);
       if (native.state === 0) idle++;
@@ -504,19 +691,28 @@ function holdMcode({ rpc, options, hear, left, log = () => {
     const env = environment();
     const args = [command(), "--session", options.id, "--tui-mode", "regular"];
     if (options.model) args.push("--model", options.model);
-    if (options.managerPrompt) args.push("--append-system-prompt", options.managerPrompt);
-    const removed = Object.keys(process.env).filter((key) => key.startsWith("GECKIT_"));
-    const launch = ["exec", "env", ...removed.flatMap((key) => ["-u", key]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key) => env[key]).map((key) => `${key}=${env[key]}`), ...args].map(quote).join(" ");
+    const prompt = [await guide(), options.managerPrompt].filter(Boolean).join("\n\n");
+    if (prompt) args.push("--append-system-prompt", prompt);
+    const selected = await selectedModel(rpc, options.id);
+    const key = await usesKey(rpc, options.model ? { provider_id: options.model.split("/")[0] } : selected);
+    if (key === void 0) throw new Error("MCode did not report the model billing source.");
+    const removed = Object.keys(process.env).filter((key2) => key2.startsWith("GECKIT_"));
+    const launch = ["exec", "env", ...removed.flatMap((key2) => ["-u", key2]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key2) => env[key2]).map((key2) => `${key2}=${env[key2]}`), ...args].map(quote).join(" ");
     if (closed) return;
     await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch, ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
     running = true;
     log("info", "session.started", { session: options.id });
-    emit([], [], [{ kind: "started", session: namespaced(options.id), key: false, ...options.model ? { model: options.model } : {} }]);
+    emit([], [], [{ kind: "started", session: namespaced(options.id), key, ...options.model ? { model: options.model } : {} }]);
+    await refreshState();
     polling = setInterval(() => {
       if (checking || closed) return;
       checking = true;
-      serial = serial.then(poll).catch((error) => {
+      serial = serial.then(poll).catch(async (error) => {
         if (!closed) log("warn", "session.poll.failed", { error: error.name });
+        if (error.status === 401 || error.status === 429) {
+          finish(error.status === 401 ? "signedOut" : "limit", error.message);
+          await close();
+        }
       }).finally(() => {
         checking = false;
       });
@@ -652,7 +848,7 @@ function holdMcode({ rpc, options, hear, left, log = () => {
         await paste(prompt, guard);
         log("info", "message.sent", { session: options.id, delivery: "send" });
       })().catch(async (error) => {
-        finish(stopping ? "stopped" : "failed", error.message);
+        finish(stopping ? "stopped" : error.status === 401 ? "signedOut" : error.status === 429 ? "limit" : "failed", error.message);
         await close();
       }).finally(() => {
         submitting = false;
@@ -717,6 +913,17 @@ function holdMcode({ rpc, options, hear, left, log = () => {
         });
       }
     },
+    async control(request) {
+      if (closed) throw new Error("MCode is closed.");
+      if (request.subtype !== "stop_task") throw new Error(`Unsupported MCode control: ${request.subtype}`);
+      const result = await stopTask(rpc, options.id, request.task_id);
+      stateAt = 0;
+      await refreshState();
+      return result;
+    },
+    leave() {
+      void close();
+    },
     end: close
   };
   return driver;
@@ -766,8 +973,8 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
 }, every = 10 * MINUTE } = {}) {
   const tmux = async (args) => {
     const { file, server } = await tmuxProgram();
-    return new Promise((resolve, reject) => {
-      execFile4(file, [...server, ...args], { env: environment(), timeout: 2e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
+    return new Promise((resolve3, reject) => {
+      execFile4(file, [...server, ...args], { env: environment(), timeout: 2e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve3(out));
     });
   };
   const exists = () => tmux(["has-session", "-t", name]).then(() => true, () => false);
@@ -847,6 +1054,9 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
     label() {
       return cached?.label;
     },
+    measuredAt() {
+      return cached?.measuredAt;
+    },
     // Read the plan again, and say how long ago it was last read.
     async refresh() {
       if (Date.now() - lastRead < MINUTE) return cached;
@@ -860,6 +1070,42 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
         if (owned) await tmux(["kill-session", "-t", name]).catch(() => {
         });
       })();
+    }
+  };
+}
+
+// src/mcode-guide.mjs
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
+import { readFile as readFile2 } from "node:fs/promises";
+function instructionGuide({
+  read = readFile2,
+  home = homedir3(),
+  source = process.env.GECKIT_SOURCE_CLI,
+  sourceGuide = process.env.GECKIT_SOURCE_CODEX_GUIDE || process.env.GECKIT_SOURCE_GUIDE
+} = {}) {
+  let enabled = false;
+  return {
+    set(value) {
+      enabled = value === true;
+    },
+    async prompt() {
+      if (!enabled) return "";
+      const command = source || join4(home, ".geckit", "bin", "geckit");
+      const paths = sourceGuide ? [sourceGuide] : source ? [] : [join4(home, ".codex", "GECKIT.md"), join4(home, ".claude", "GECKIT.md")];
+      let guide;
+      for (const path of paths) {
+        try {
+          guide = await read(path, "utf8");
+          break;
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      }
+      guide ??= `This conversation runs in GeckIt, a desktop app. The first line of your answer appears on its conversation card: state what is done or what remains. Write complete URLs for produced links. Report background commands and what they await. Do not set or clear goals on your own. Use the GeckIt CLI below to read sessions and assigned employee context (employees current, then employees memory with every returned cursor). Use its instructions providers or instructions app command before changing a provider or GeckIt. Independent work in another project belongs in a separate conversation requested with geckit start; read geckit help for the exact format. Do not duplicate the work of this conversation.`;
+      return `${guide}
+Use this GeckIt CLI for all GeckIt commands: ${JSON.stringify(command)}.
+`;
     }
   };
 }
@@ -891,6 +1137,7 @@ function create(context = {}, dependencies = {}) {
   const drivers = /* @__PURE__ */ new Set();
   let disposed = false, known = [], reported;
   const quota = dependencies.quota ?? quotaReader({ log });
+  const guide = dependencies.guide ?? instructionGuide();
   const info = async (root, id) => {
     const native = nativeId(id);
     const session = (await rpc.request(`${API}/session/${native}`)).session;
@@ -909,17 +1156,18 @@ function create(context = {}, dependencies = {}) {
       throw error;
     }
     const saved = await messages(rpc, nativeId(id));
-    return { items: saved.flatMap(messageItems), tasks: [], ...contextSpend(saved) };
+    return { items: (await Promise.all(saved.map((message) => messageItemsWithImages(message, root)))).flat(), tasks: await backgroundTasks(rpc, nativeId(id)), ...contextSpend(saved) };
   };
   const reportPlan = async () => {
+    if (await usesKey(rpc, await selectedModel(rpc)) === true) return;
     const found = await quota.refresh();
     if (!found?.windows) return;
     const said = JSON.stringify(reported);
     reported = found.windows;
     if (said === JSON.stringify(found.windows)) return;
-    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: "plan", plan: found.windows }] });
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: "plan", plan: found.windows }, { kind: "usage", usage: quotaUsage(found.windows, found.measuredAt) }] });
   };
-  return {
+  const provider = {
     id: ID,
     family: ID,
     name: "MiniMax Code (tmux)",
@@ -938,7 +1186,8 @@ function create(context = {}, dependencies = {}) {
     idleMs: 36e5,
     waitForExit: true,
     instructions: "own",
-    setInstructions: async () => {
+    setInstructions: async (enabled) => {
+      guide.set(enabled);
     },
     program: dependencies.program ?? program,
     account: async () => {
@@ -947,6 +1196,9 @@ function create(context = {}, dependencies = {}) {
       const account = await rpc.account();
       const from = installFrom(installed.path);
       const program2 = { ...installed, ...from === void 0 ? {} : { from } };
+      const model = await selectedModel(rpc);
+      const key = await usesKey(rpc, model);
+      if (key === true) return { provider: ID, here: true, signedIn: model?.enabled === true ? true : void 0, key, program: program2 };
       if (account.state !== "authenticated") return { provider: ID, here: true, signedIn: false, program: program2 };
       const plan = await quota.windows();
       const label = quota.label();
@@ -955,6 +1207,8 @@ function create(context = {}, dependencies = {}) {
         here: true,
         signedIn: true,
         program: program2,
+        ...key === void 0 ? {} : { key },
+        ...plan === void 0 ? {} : { usage: quotaUsage(plan, quota.measuredAt?.()) },
         ...plan === void 0 || label === void 0 ? {} : { plan: label }
       };
     },
@@ -968,14 +1222,18 @@ function create(context = {}, dependencies = {}) {
         ...model.enabled === false ? { disabled: true } : {},
         ...positive(model.context_limit) ? { contextWindow: Number(model.context_limit) } : {},
         ...positive(model.max_output_tokens) ? { maxOutputTokens: Number(model.max_output_tokens) } : {},
+        ...efforts.includes(model.default_effort) ? { defaultReasoning: model.default_effort } : {},
         reasoning: (model.effort_options ?? []).filter((value) => ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(value)).map((value) => ({ value, says: value }))
       }));
       return known;
     },
     limits: async (models) => {
+      if (!known.length && models.length) await provider.models();
       const windows = new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow]));
+      const selected = known.find((model) => model.isDefault)?.value;
+      if (await usesKey(rpc, selected ? { provider_id: selected.split("/")[0] } : void 0) === true) return { windows };
       const plan = await quota.windows();
-      return { windows, ...plan === void 0 ? {} : { plan } };
+      return { windows, ...plan === void 0 ? {} : { plan, ...quotaUsage(plan) } };
     },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));
@@ -1000,14 +1258,16 @@ function create(context = {}, dependencies = {}) {
       if (!result.session_id) throw new Error("MCode did not return a session ID.");
       return namespaced(result.session_id);
     },
-    fork: async (root, id, at) => {
+    fork: async (root, id, at, _mode, model) => {
       await info(root, id);
+      const selection = model ? modelSelection(model) : void 0;
       const saved = await messages(rpc, nativeId(id));
       const point = saved.findLast((message) => message.role === "assistant" && Number(message.timestamp) <= at && message.actions?.fork === true);
       if (!point) throw new Error("MCode has no completed assistant response to fork at this point.");
       const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, "POST", { assistant_message_id: point.msg_id, client_request_id: randomUUID4(), use_suggested_title: false, create_isolated_worktree: false });
       if (!result.session?.session_id) throw new Error("MCode did not return the forked session.");
       const forkId = namespaced(result.session.session_id);
+      if (selection) await rpc.request(`${API}/models/select`, "POST", { session_id: result.session.session_id, ...selection });
       return { id: forkId, begun: true, items: (await read(root, forkId)).items };
     },
     has: async (root, id) => {
@@ -1022,8 +1282,11 @@ function create(context = {}, dependencies = {}) {
     read,
     links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
     goal: async () => void 0,
-    setGoal: async () => void 0,
+    setGoal: async () => {
+      throw new Error("Native MCode goals need a GeckIt goal-driver lifecycle; this provider does not advertise nativeGoals.");
+    },
     clearGoal: async () => {
+      throw new Error("Native MCode goals are not managed by this provider.");
     },
     rename: async (id, title) => {
       await rpc.request(`${API}/session/${nativeId(id)}`, "PATCH", { title });
@@ -1039,7 +1302,7 @@ function create(context = {}, dependencies = {}) {
       return (listed.servers ?? []).map((server) => {
         const state = states.get(server.name);
         const enabled = server.enabled !== false;
-        const status = !enabled ? "disabled" : ["expired", "pending_auth"].includes(state?.authStatus) ? "needs-auth" : state === void 0 || state.configured === false ? "pending" : "connected";
+        const status = !enabled ? "disabled" : ["expired", "pending_auth"].includes(state?.auth_status ?? state?.authStatus) ? "needs-auth" : state === void 0 || state.configured === false ? "pending" : "connected";
         return { name: server.name, status };
       });
     },
@@ -1054,10 +1317,10 @@ function create(context = {}, dependencies = {}) {
       if (disposed) throw new Error("MCode provider disposed.");
       let driver;
       const report = (event) => {
-        if (event.signals?.some((signal) => signal.kind === "ended")) void reportPlan();
+        if (event.signals?.some((signal) => signal.kind === "ended")) void reportPlan().catch((error) => log("warn", "quota.refresh.failed", { error: error.name }));
         hear(event);
       };
-      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear: report, left: () => {
+      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, guide: () => guide.prompt(), hear: report, left: () => {
         drivers.delete(driver);
         left();
       }, log, ...dependencies.terminal });
@@ -1071,6 +1334,7 @@ function create(context = {}, dependencies = {}) {
       void Promise.allSettled([...drivers].map((driver) => driver.end())).then(() => rpc.dispose());
     }
   };
+  return provider;
 }
 export {
   create
