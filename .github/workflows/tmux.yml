@@ -1,0 +1,58 @@
+name: tmux binaries
+
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-14 }
+          - { target: darwin-x64, runner: macos-14 }
+          - { target: linux-x64, runner: ubuntu-24.04 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: startsWith(matrix.target, 'darwin')
+        run: ./scripts/build-tmux.sh ${{ matrix.target }} tmux-${{ matrix.target }}
+      - if: startsWith(matrix.target, 'linux')
+        run: docker run --rm -v "$PWD:/w" -w /w alpine:3.20 sh -c 'apk add --no-cache build-base linux-headers curl && ./scripts/build-tmux.sh ${{ matrix.target }} tmux-${{ matrix.target }}'
+      - if: startsWith(matrix.target, 'linux')
+        run: file tmux-${{ matrix.target }} | grep -q 'statically linked'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tmux-${{ matrix.target }}
+          path: tmux-${{ matrix.target }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^TMUX_VERSION=//p' scripts/build-tmux.sh)
+          tag=tmux-$version-${{ github.run_number }}
+          gh release create "$tag" dist/* --title "tmux $version" --notes "tmux $version for the plugin to download when no tmux is installed. Built by scripts/build-tmux.sh." --latest=false
+          node -e '
+            const { createHash } = require("node:crypto")
+            const fs = require("node:fs")
+            const [version, tag] = process.argv.slice(1)
+            const files = {}
+            for (const name of fs.readdirSync("dist").sort()) files[name.replace(/^tmux-/, "")] = { url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${name}`, sha256: createHash("sha256").update(fs.readFileSync(`dist/${name}`)).digest("hex") }
+            fs.writeFileSync("tmux-binaries.json", JSON.stringify({ version, files }, null, 2) + "\n")
+          ' "$version" "$tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmux-binaries.json
+          git commit -m "build: tmux $version binaries ($tag)"
+          git push

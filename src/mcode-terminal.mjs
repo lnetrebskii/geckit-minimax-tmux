@@ -1,0 +1,215 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { findTmux } from './tmux-binary.mjs';
+import { mcodeCommand, mcodeEnvironment } from './mcode-rpc.mjs';
+import { messageItems, contextSpend, messages, API, namespaced } from './mcode-history.mjs';
+
+const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+export function terminalScreen(text) {
+  const lines = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split('\n').map((line) => line.trimEnd());
+  const body = lines.join('\n');
+  const border = (line) => /^\s*[─━]{5}/.test(line ?? '');
+  const prompt = lines.findLastIndex((line, index) => /^\s*›\s/.test(line) && border(lines[index - 1]) && border(lines[index + 1]));
+  const approvalAt = lines.findLastIndex((line) => /◆ Approval required|Always allow matching actions\?|Deny this action\?/.test(line));
+  const approval = approvalAt !== -1 && (prompt === -1 || approvalAt > prompt);
+  if (approval && /Always allow matching actions\?/.test(body)) return question(body.trim(), [{ label: 'Always allow matching actions', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }]);
+  if (approval && /Deny this action\?/.test(body)) return question(body.trim(), [{ label: 'Deny', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }], true);
+  if (approval) {
+    const choices = lines.map((line) => /^\s*[│┃]?\s*(?:›\s*)?([123])\s+((?:Allow for this conversation|Always allow matching actions|Deny and guide MCode).*)/.exec(line)).filter(Boolean);
+    if (choices.length) return question(body.trim(), choices.map((one) => ({ label: one[2].replace(/\s*[│┃]\s*$/, '').trim(), keys: [one[1]] })));
+  }
+  const askAt = lines.findLastIndex((line) => /[╭┌].*\bAsk\b/.test(line));
+  if (askAt !== -1 && (prompt === -1 || askAt > prompt)) {
+    const frame = lines.slice(askAt).join('\n');
+    if (/Type your answer · Enter (?:send|next)/.test(frame)) return question(frame.trim(), [], true);
+    if (/↑↓ move|Space toggle/.test(frame)) {
+      const multiple = /Space toggle/.test(frame);
+      const options = lines.slice(askAt).flatMap((line) => {
+        const match = /^\s*[│┃]?\s*(?:[›→]\s*)?(?:([●○])\s*)?([1-9])\s{1,}(.+?)\s*[│┃]?\s*$/.exec(line);
+        return match ? [{ label: `${match[1] ? `${match[1]} ` : ''}${match[3].trim()}`, keys: [match[2]] }] : [];
+      });
+      if (multiple) options.push({ label: 'Submit selected', keys: ['Enter'] });
+      if (/Other…/.test(frame) && !options.some((option) => option.label.includes('Other…'))) options.push({ label: 'Other…', keys: ['o'] });
+      if (/more below/.test(frame)) options.push({ label: 'More options', keys: ['Down'] });
+      if (/more above/.test(frame)) options.push({ label: 'Previous options', keys: ['Up'] });
+      if (options.length) return question(frame.trim(), options);
+    }
+  }
+  // Unsupported native dialogs remain visible in the attached terminal and
+  // are never mistaken for completion or automatically accepted.
+  const status = prompt === -1 ? body : lines.slice(Math.max(0, prompt - 4), prompt).join('\n');
+  const working = /Esc (?:interrupt|to interrupt|stop)|esc (?:interrupt|to interrupt|stop)|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/.test(status);
+  return { kind: working ? 'working' : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? 'idle' : 'unknown', text: body };
+}
+function question(title, options, input = false) { return { kind: 'question', title, options, input, signature: JSON.stringify({ title, options }) }; }
+
+export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
+  if (process.platform === 'win32' || options.root.startsWith('ssh://')) throw new Error('MCode tmux requires a local macOS or Linux project.');
+  const name = `geckit-minimax-${randomUUID().slice(0, 12)}`;
+  let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
+  let checking = false;
+  let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
+  const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
+  const tmux = async (args, input) => {
+    const { file, server } = await tmuxProgram();
+    return new Promise((resolve, reject) => {
+      const child = execFile(file, [...server, ...args], { env: environment(), timeout: 10000, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
+      if (input !== undefined) child.stdin.end(input);
+    });
+  };
+  const alive = () => tmux(['display-message', '-p', '-t', name, '#{pane_dead}']).then((text) => text.trim() === '0', () => false);
+  const screen = async () => terminalScreen(await tmux(['capture-pane', '-p', '-t', name]));
+  const resolveQuestion = () => {
+    if (pending) { emit([], [`card:${pending.id}`], [{ kind: 'resolved', ask: pending.id }]); pending = undefined; }
+  };
+  const showQuestion = (value) => {
+    if (pending?.signature === value.signature) return;
+    resolveQuestion(); pending = { ...value, id: `mcode-question:${randomUUID()}` };
+    emit([], [], [{ kind: 'asks', ask: pending.id, wanted: { kind: 'question', question: value.title, choices: value.options.map((option) => option.label) } }]);
+  };
+  const refresh = async () => {
+    const saved = await messages(rpc, options.id);
+    const items = saved.flatMap(messageItems);
+    const current = new Map(items.map((item) => [item.id, JSON.stringify(item)]));
+    const changed = items.filter((item) => previous.get(item.id) !== current.get(item.id));
+    const gone = [...previous.keys()].filter((id) => !current.has(id));
+    if (turn && saved.some((message) => !baseline.has(message.msg_id))) activity = true;
+    const spend = contextSpend(saved);
+    emit(changed, gone, spend ? [{ kind: 'spend', ...spend }] : []);
+    previous = current;
+    return saved;
+  };
+  const finish = (how, text) => {
+    if (!turn) return;
+    turn = false; stopping = false; idle = 0;
+    emit([], [], [{ kind: 'ended', how, ...(text ? { text } : {}) }]);
+    log('info', 'session.turn.ended', { session: options.id, outcome: how });
+  };
+  const close = async () => {
+    if (closed) return;
+    resolveQuestion(); finish('stopped'); closed = true; clearInterval(polling);
+    await started?.catch(() => {});
+    if (running) {
+      // Let MCode release native ownership/turn locks before removing the pane.
+      await tmux(['send-keys', '-t', name, 'Escape', 'C-u', 'C-d']).catch(() => {});
+      for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
+      await tmux(['kill-session', '-t', name]).catch(() => {});
+    }
+    running = false;
+    left(); log('info', 'session.closed', { session: options.id });
+  };
+  const poll = async () => {
+    if (closed || !running || submitting) return;
+    if (!await alive()) { finish('failed', 'MCode exited.'); await close(); return; }
+    const saved = await refresh();
+    const shown = await screen();
+    if (shown.kind === 'question') { activity = true; idle = 0; showQuestion(shown); return; }
+    resolveQuestion();
+    if (shown.kind === 'working') activity = true;
+    if (turn && (activity || stopping) && shown.kind === 'idle') {
+      // A transcript alone is insufficient: helpers/tools can still be active.
+      const native = await rpc.request(`${API}/session/${options.id}/activity`);
+      if (native.state === 0) idle++; else idle = 0;
+      if (idle >= 2) {
+        const last = saved.findLast((message) => message.role === 'assistant' && !baseline.has(message.msg_id));
+        finish(stopping ? 'stopped' : last?.finish_reason === 'error' ? 'failed' : 'done');
+      }
+    } else idle = 0;
+  };
+  const start = async () => {
+    const session = (await rpc.request(`${API}/session/${options.id}`)).session;
+    if (!session || session.workspace_dir !== options.root) throw new Error('MCode session does not belong to this project.');
+    if (options.reasoning) {
+      const model = options.model || session.effective_model || `${session.model?.provider_id}/${session.model?.model_id}`;
+      const slash = model.indexOf('/');
+      if (slash < 1 || model.includes('undefined')) throw new Error('Select a model before setting reasoning effort.');
+      await rpc.request(`${API}/models/select`, 'POST', { session_id: options.id, provider_id: model.slice(0, slash), model_id: model.slice(slash + 1), thinking: { effort: options.reasoning } });
+    }
+    baseline = new Set((await refresh()).map((message) => message.msg_id));
+    const env = environment();
+    const args = [command(), '--session', options.id, '--tui-mode', 'regular'];
+    if (options.model) args.push('--model', options.model);
+    const removed = Object.keys(process.env).filter((key) => key.startsWith('GECKIT_'));
+    const launch = ['exec', 'env', ...removed.flatMap((key) => ['-u', key]), `PATH=${env.PATH}`, ...['MINIMAX_DATA_DIR', 'MAVIS_DATA_DIR', 'MINIMAX_PROFILE', 'MAVIS_PROFILE'].filter((key) => env[key]).map((key) => `${key}=${env[key]}`), ...args].map(quote).join(' ');
+    if (closed) return;
+    await tmux(['new-session', '-d', '-s', name, '-x', '140', '-y', '50', '-c', options.root, launch, ';', 'set-option', '-p', '-t', name, 'remain-on-exit', 'on']);
+    running = true;
+    log('info', 'session.started', { session: options.id });
+    emit([], [], [{ kind: 'started', session: namespaced(options.id), key: false, ...(options.model ? { model: options.model } : {}) }]);
+    polling = setInterval(() => { if (checking || closed) return; checking = true; serial = serial.then(poll).catch((error) => { if (!closed) log('warn', 'session.poll.failed', { error: error.name }); }).finally(() => { checking = false; }); }, 700);
+  };
+  const ready = async () => {
+    for (let attempt = 0; attempt < 600; attempt++) {
+      if (closed || stopping) throw new Error('MCode stopped before delivery.');
+      if (!await alive()) throw new Error('MCode exited before input. Run mcode in a terminal to check login and startup.');
+      const shown = await screen();
+      if (shown.kind === 'idle') { resolveQuestion(); return; }
+      if (shown.kind === 'question') { showQuestion(shown); attempt = 0; }
+      await delay(100);
+    }
+    throw new Error(`MCode is waiting in its terminal. Attach with: tmux attach -t ${name}`);
+  };
+  const paste = async (text, guard) => {
+    const buffer = `geckit-minimax-${randomUUID()}`;
+    try {
+      await guard(); await tmux(['load-buffer', '-b', buffer, '-'], text);
+      await guard(); await tmux(['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', name]);
+      await delay(100); await guard(); await tmux(['send-keys', '-t', name, 'Enter']);
+    } finally { await tmux(['delete-buffer', '-b', buffer]).catch(() => {}); }
+  };
+  const input = (text, images, before) => {
+    if (images?.length) throw new Error('MCode tmux image attachments are not supported yet.');
+    const prompt = [...(before ?? []), text].join('\n\n');
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(prompt)) throw new Error('Terminal control characters are not allowed in prompts.');
+    return prompt;
+  };
+  const driver = {
+    send(text, images = [], before = []) {
+      if (closed || submitting || turn) throw new Error('MCode is not ready for a new turn.');
+      const prompt = input(text, images, before);
+      submitting = true; turn = true; stopping = false; activity = false; idle = 0;
+      emit([], [], [{ kind: 'begun' }]);
+      void (async () => {
+        const fresh = started === undefined;
+        started ??= start(); await started; await ready();
+        if (fresh && options.mode) {
+          const mode = { manual: 'ask', auto: 'auto', plan: 'ask', bypassPermissions: 'full' }[options.mode];
+          if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
+          await paste(`/permission ${mode}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
+          await delay(350); await ready();
+          await paste(`/plan ${options.mode === 'plan' ? 'on' : 'off'}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
+          await delay(350); await ready();
+        }
+        baseline = new Set((await refresh()).map((message) => message.msg_id));
+        await paste(prompt, async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); });
+        log('info', 'message.sent', { session: options.id, delivery: 'send' });
+      })().catch(async (error) => { finish(stopping ? 'stopped' : 'failed', error.message); await close(); }).finally(() => { submitting = false; });
+    },
+    async inject(text, images = [], before = []) {
+      if (closed || !turn || stopping || submitting || pending) throw new Error('MCode cannot accept guidance now; the message remains queued.');
+      const prompt = input(text, images, before);
+      submitting = true;
+      const guard = async () => { if (closed || !turn || stopping || !await alive() || (await screen()).kind !== 'working') throw new Error('MCode is no longer ready for guidance.'); };
+      try { await paste(prompt, guard); log('info', 'message.sent', { session: options.id, delivery: 'inject' }); }
+      catch (error) { const shown = await screen().catch(() => ({})); if (shown.kind === 'idle' || shown.kind === 'working') await tmux(['send-keys', '-t', name, 'C-u']).catch(() => {}); throw error; }
+      finally { submitting = false; }
+    },
+    answer(id, answer) {
+      if (pending?.id !== id || closed) return;
+      const current = pending;
+      serial = serial.then(async () => {
+        const shown = await screen();
+        if (shown.signature !== current.signature) { resolveQuestion(); return; }
+        const selected = shown.options.find((option) => option.label === answer);
+        if (!selected && !shown.input) return;
+        if (selected) await tmux(['send-keys', '-t', name, ...selected.keys]);
+        else await paste(input(String(answer), [], []), async () => { if (closed) throw new Error('MCode closed.'); });
+        resolveQuestion();
+      }).catch((error) => { log('warn', 'permission.reply.failed', { error: error.name }); });
+    },
+    stop() { if (!closed && turn) { stopping = true; resolveQuestion(); void tmux(['send-keys', '-t', name, 'Escape']).catch(() => {}); } },
+    end: close,
+  };
+  return driver;
+}
