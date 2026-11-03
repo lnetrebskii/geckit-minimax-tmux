@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { McodeRpc, program } from './mcode-rpc.mjs';
 import { holdMcode } from './mcode-terminal.mjs';
+import { quotaReader } from './mcode-quota.mjs';
 import { API, ID, nativeId, namespaced, messages, messageItems, contextSpend, sessions, providerRow } from './mcode-history.mjs';
 
 const local = (root) => typeof root === 'string' && !root.startsWith('ssh://');
@@ -10,11 +11,19 @@ const modelSelection = (value) => {
   if (at <= 0 || at === value.length - 1) throw new Error('Select a provider/model from MCode’s model list.');
   return { provider_id: value.slice(0, at), model_id: value.slice(at + 1) };
 };
+// How MCode was put on this machine, as GeckIt says it for the other tools.
+const installFrom = (path) => {
+  if (typeof path !== 'string') return undefined;
+  if (path.includes('/.minimax-code/')) return 'the native installer';
+  if (path.includes('node_modules/@minimax-ai/code')) return 'npm';
+  if (path.includes('/Cellar/') || path.includes('/homebrew/')) return 'Homebrew';  return undefined;
+};
 export function create(context = {}, dependencies = {}) {
   const rpc = dependencies.rpc ?? new McodeRpc();
   const log = (level, event, fields) => { try { context.log?.write(level, event, fields); } catch {} };
   const drivers = new Set();
-  let disposed = false, known = [];
+  let disposed = false, known = [], reported;
+  const quota = dependencies.quota ?? quotaReader({ log });
   const info = async (root, id) => {
     const native = nativeId(id);
     const session = (await rpc.request(`${API}/session/${native}`)).session;
@@ -26,6 +35,15 @@ export function create(context = {}, dependencies = {}) {
     const saved = await messages(rpc, nativeId(id));
     return { items: saved.flatMap(messageItems), tasks: [], ...contextSpend(saved) };
   };
+  // The plan is the account's, so it is said once for every conversation.
+  const reportPlan = async () => {
+    const found = await quota.refresh();
+    if (!found?.windows) return;
+    const said = JSON.stringify(reported);
+    reported = found.windows;
+    if (said === JSON.stringify(found.windows)) return;
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: 'plan', plan: found.windows }] });
+  };
   return {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
     loginCommand: 'mcode login', planName: 'MiniMax', localOnly: true,
@@ -36,7 +54,13 @@ export function create(context = {}, dependencies = {}) {
       const installed = await (dependencies.program ?? program)();
       if (!installed) return { provider: ID, here: false, signedIn: undefined };
       const account = await rpc.account();
-      return { provider: ID, here: true, signedIn: account.state === 'authenticated', program: installed };
+      const from = installFrom(installed.path);
+      const program2 = { ...installed, ...(from === undefined ? {} : { from }) };
+      if (account.state !== 'authenticated') return { provider: ID, here: true, signedIn: false, program: program2 };
+      const plan = await quota.windows();
+      const label = quota.label();
+      return { provider: ID, here: true, signedIn: true, program: program2,
+        ...(plan === undefined || label === undefined ? {} : { plan: label }) };
     },
     models: async () => {
       const data = await rpc.request(`${API}/models/list`);
@@ -49,7 +73,11 @@ export function create(context = {}, dependencies = {}) {
       }));
       return known;
     },
-    limits: async (models) => ({ windows: new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow])) }),
+    limits: async (models) => {
+      const windows = new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow]));
+      const plan = await quota.windows();
+      return { windows, ...(plan === undefined ? {} : { plan }) };
+    },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));
       return parent === row.root ? row : { ...row, project: parent };
@@ -89,17 +117,37 @@ export function create(context = {}, dependencies = {}) {
     goal: async () => undefined, setGoal: async () => undefined, clearGoal: async () => {},
     rename: async (id, title) => { await rpc.request(`${API}/session/${nativeId(id)}`, 'PATCH', { title }); },
     remote: async () => { throw new Error('MCode tmux supports local projects only.'); },
-    mcp: async () => undefined, browsers: async () => undefined,
+    mcp: async (_root, change) => {
+      if (change !== undefined) await rpc.request(`${API}/mcp/servers/${encodeURIComponent(change.name)}/enabled`, 'PATCH', { enabled: change.enabled === true });
+      const listed = await rpc.request(`${API}/mcp/servers`);
+      const runtime = await rpc.request(`${API}/mcp/runtime/servers`).catch(() => ({}));
+      const states = new Map((runtime.servers ?? []).map((server) => [server.name, server]));
+      return (listed.servers ?? []).map((server) => {
+        const state = states.get(server.name);
+        const enabled = server.enabled !== false;
+        const status = !enabled ? 'disabled'
+          : state?.authStatus === 'expired' ? 'needs-auth'
+          : state === undefined || state.configured === false ? 'pending' : 'connected';
+        return { name: server.name, status };
+      });
+    },
+    browsers: async () => undefined,
     correct: async () => ({ ok: false, error: 'Text correction is unavailable in MCode tmux.' }),
     delete: async (root, id) => { await info(root, id); await rpc.request(`${API}/session/${nativeId(id)}`, 'DELETE'); return true; },
     hold: (options, hear, left) => {
       if (disposed) throw new Error('MCode provider disposed.');
       let driver;
-      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear, left: () => { drivers.delete(driver); left(); }, log, ...dependencies.terminal });
+      const report = (event) => {
+        if (event.signals?.some((signal) => signal.kind === 'ended')) void reportPlan();
+        hear(event);
+      };
+      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear: report, left: () => { drivers.delete(driver); left(); }, log, ...dependencies.terminal });
+      driver.report = report;
       drivers.add(driver); return driver;
     },
     dispose: () => {
       disposed = true;
+      quota.dispose();
       void Promise.allSettled([...drivers].map((driver) => driver.end())).then(() => rpc.dispose());
     },
   };

@@ -1,5 +1,5 @@
 // src/mcode-provider.mjs
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // src/mcode-rpc.mjs
 import { spawn, execFile } from "node:child_process";
@@ -352,7 +352,7 @@ function holdMcode({ rpc, options, hear, left, log = () => {
   if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("MCode tmux requires a local macOS or Linux project.");
   const name = `geckit-minimax-${randomUUID2().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory;
+  let checking = false, imagesDirectory, wanted, applying;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
   const emit = (items = [], gone = [], signals = []) => {
     if (!closed) hear({ items, gone, signals });
@@ -445,6 +445,7 @@ function holdMcode({ rpc, options, hear, left, log = () => {
         finish(stopping ? "stopped" : last?.finish_reason === "error" ? "failed" : "done");
       }
     } else idle = 0;
+    await applyPermission();
   };
   const start = async () => {
     const session = (await rpc.request(`${API}/session/${options.id}`)).session;
@@ -519,6 +520,25 @@ function holdMcode({ rpc, options, hear, left, log = () => {
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(prompt)) throw new Error("Terminal control characters are not allowed in prompts.");
     return prompt;
   };
+  const applyPermission = (beforeSend = false) => {
+    if (applying) return applying;
+    if (!wanted || closed || !running || !beforeSend && (turn || submitting)) return Promise.resolve();
+    applying = (async () => {
+      const requested = wanted;
+      const mode = { manual: "ask", auto: "auto", bypassPermissions: "full" }[requested];
+      if (!mode || (await screen()).kind !== "idle") return;
+      await paste(`/permission ${mode}`, async () => {
+        if (closed || stopping) throw new Error("MCode stopped.");
+      });
+      await delay(350);
+      await ready();
+      if (wanted === requested) wanted = void 0;
+      log("info", "session.permission.changed", { session: options.id, mode });
+    })().finally(() => {
+      applying = void 0;
+    });
+    return applying;
+  };
   const attach = async (images, guard) => {
     if (!images.length) return;
     imagesDirectory ??= await mkdtemp(join3(tmpdir(), "geckit-mcode-images-"));
@@ -559,6 +579,7 @@ function holdMcode({ rpc, options, hear, left, log = () => {
         const fresh = started === void 0;
         started ??= start();
         await started;
+        await applying;
         await ready();
         if (fresh && options.mode) {
           const mode = { manual: "ask", auto: "auto", plan: "ask", bypassPermissions: "full" }[options.mode];
@@ -573,6 +594,10 @@ function holdMcode({ rpc, options, hear, left, log = () => {
           });
           await delay(350);
           await ready();
+        }
+        while (wanted && !closed) {
+          await ready();
+          await applyPermission(true);
         }
         baseline = new Set((await refresh()).map((message) => message.msg_id));
         const guard = async () => {
@@ -628,6 +653,17 @@ function holdMcode({ rpc, options, hear, left, log = () => {
         log("warn", "permission.reply.failed", { error: error.name });
       });
     },
+    permit(mode, again = []) {
+      if (closed || !["manual", "auto", "bypassPermissions"].includes(mode)) return;
+      wanted = mode;
+      if (mode === "auto" && pending !== void 0 && again.includes(pending.id)) {
+        const allow = pending.options.find((option) => /^Allow for this conversation$/.test(option.label));
+        if (allow !== void 0) this.answer(pending.id, allow.label);
+      }
+      void applyPermission().catch((error) => {
+        log("warn", "session.permission.failed", { error: error.name });
+      });
+    },
     stop() {
       if (!closed && turn) {
         stopping = true;
@@ -649,6 +685,139 @@ function validateImages(images = []) {
   }
 }
 
+// src/mcode-quota.mjs
+import { execFile as execFile4 } from "node:child_process";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { tmpdir as tmpdir2 } from "node:os";
+import { setTimeout as delay2 } from "node:timers/promises";
+var MINUTE = 6e4;
+var quote2 = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+function quotaDuration(text) {
+  let total = 0, found = false;
+  for (const match of String(text ?? "").matchAll(/(\d+)\s*([dhms])/g)) {
+    total += Number(match[1]) * { d: 864e5, h: 36e5, m: MINUTE, s: 1e3 }[match[2]];
+    found = true;
+  }
+  return found ? total : void 0;
+}
+function parseQuota(text, now = Date.now()) {
+  const plain = String(text ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").split("\n").map((line) => line.replace(/^\s*[│┃]\s?/, "").replace(/\s*[│┃]\s*$/, "")).join("\n");
+  const windows = {};
+  for (const match of plain.matchAll(/^\s*[│┃]?\s*(5-hour|Weekly)\b[^\n]*?(\d{1,3})\s*%\s*left\b[^\n]*?resets in\s+([0-9dhms]+(?:\s*[0-9dhms]+)*)/gim)) {
+    const duration = quotaDuration(match[3]);
+    if (duration === void 0) continue;
+    const spent = Math.max(0, Math.min(100, 100 - Number(match[2]))) / 100;
+    const window = { part: spent, resetsAt: now + duration };
+    if (match[1].toLowerCase() === "5-hour") windows.fiveHour = window;
+    else windows.sevenDay = window;
+  }
+  if (!windows.fiveHour && !windows.sevenDay) return void 0;
+  const account = /^\s*[│┃]?\s*Account:\s*(.+?)\s*$/im.exec(plain)?.[1];
+  const label = account === void 0 ? void 0 : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
+  return { windows, ...label ? { label } : {} };
+}
+function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {
+}, every = 10 * MINUTE } = {}) {
+  const tmux = async (args) => {
+    const { file, server } = await tmuxProgram();
+    return new Promise((resolve, reject) => {
+      execFile4(file, [...server, ...args], { env: environment(), timeout: 2e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
+    });
+  };
+  const exists = () => tmux(["has-session", "-t", name]).then(() => true, () => false);
+  const alive = () => tmux(["display-message", "-p", "-t", name, "#{pane_dead}"]).then((text) => text.trim() === "0", () => false);
+  const capture = () => tmux(["capture-pane", "-p", "-J", "-t", name]);
+  let cached, reading, disposal, owned = false, disposed = false, lastRead = 0;
+  const launch = async () => {
+    const env = environment();
+    const removed = Object.keys(process.env).filter((key) => key.startsWith("GECKIT_"));
+    const command2 = [
+      "exec",
+      "env",
+      ...removed.flatMap((key) => ["-u", key]),
+      `PATH=${env.PATH}`,
+      ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key) => env[key]).map((key) => `${key}=${env[key]}`),
+      command(),
+      "--tui-mode",
+      "regular"
+    ].map(quote2).join(" ");
+    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", tmpdir2(), command2]);
+    owned = true;
+  };
+  const ready = async () => {
+    for (let attempt = 0; attempt < 400; attempt++) {
+      if (disposed) throw new Error("MCode provider disposed.");
+      if (!await alive()) throw new Error("MCode exited before the status panel.");
+      if (terminalScreen(await capture()).kind === "idle") return;
+      await delay2(100);
+    }
+    throw new Error("MCode did not become ready for /status.");
+  };
+  const read = async () => {
+    if (disposed) return void 0;
+    if (await exists() && !await alive()) await tmux(["kill-session", "-t", name]).catch(() => {
+    });
+    if (!await exists()) await launch();
+    await ready();
+    await tmux(["send-keys", "-t", name, "-l", "/status"]);
+    await delay2(500);
+    await tmux(["send-keys", "-t", name, "Enter"]);
+    let found;
+    try {
+      for (let attempt = 0; attempt < 150; attempt++) {
+        if (disposed) return void 0;
+        await delay2(200);
+        found = parseQuota(await capture());
+        if (found !== void 0) break;
+      }
+    } finally {
+      await tmux(["send-keys", "-t", name, "Escape"]).catch(() => {
+      });
+    }
+    lastRead = Date.now();
+    if (found !== void 0) cached = { ...found, measuredAt: lastRead };
+    log("info", "quota.read", { outcome: found === void 0 ? "unreadable" : "completed", windows: found === void 0 ? 0 : Object.keys(found.windows).length });
+    return found;
+  };
+  const refresh = () => {
+    if (disposed) return Promise.resolve(void 0);
+    reading ??= read().finally(() => {
+      reading = void 0;
+    });
+    return reading.catch((error) => {
+      if (!disposed) log("warn", "quota.read.failed", { error: error.name });
+      return void 0;
+    });
+  };
+  return {
+    // The plan's windows as last read. The first reading waits for MCode;
+    // later ones are answered from what is known and refreshed behind them.
+    async windows() {
+      if (cached === void 0) return (await refresh())?.windows;
+      if (Date.now() - cached.measuredAt > every) void refresh();
+      return cached.windows;
+    },
+    // The name of the plan, as MCode itself names it.
+    label() {
+      return cached?.label;
+    },
+    // Read the plan again, and say how long ago it was last read.
+    async refresh() {
+      if (Date.now() - lastRead < MINUTE) return cached;
+      return refresh();
+    },
+    dispose() {
+      disposed = true;
+      return disposal ??= (async () => {
+        await reading?.catch(() => {
+        });
+        if (owned) await tmux(["kill-session", "-t", name]).catch(() => {
+        });
+      })();
+    }
+  };
+}
+
 // src/mcode-provider.mjs
 var local = (root) => typeof root === "string" && !root.startsWith("ssh://");
 var inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, "") + "/");
@@ -656,6 +825,13 @@ var modelSelection = (value) => {
   const at = value.indexOf("/");
   if (at <= 0 || at === value.length - 1) throw new Error("Select a provider/model from MCode\u2019s model list.");
   return { provider_id: value.slice(0, at), model_id: value.slice(at + 1) };
+};
+var installFrom = (path) => {
+  if (typeof path !== "string") return void 0;
+  if (path.includes("/.minimax-code/")) return "the native installer";
+  if (path.includes("node_modules/@minimax-ai/code")) return "npm";
+  if (path.includes("/Cellar/") || path.includes("/homebrew/")) return "Homebrew";
+  return void 0;
 };
 function create(context = {}, dependencies = {}) {
   const rpc = dependencies.rpc ?? new McodeRpc();
@@ -666,7 +842,8 @@ function create(context = {}, dependencies = {}) {
     }
   };
   const drivers = /* @__PURE__ */ new Set();
-  let disposed = false, known = [];
+  let disposed = false, known = [], reported;
+  const quota = dependencies.quota ?? quotaReader({ log });
   const info = async (root, id) => {
     const native = nativeId(id);
     const session = (await rpc.request(`${API}/session/${native}`)).session;
@@ -686,6 +863,14 @@ function create(context = {}, dependencies = {}) {
     }
     const saved = await messages(rpc, nativeId(id));
     return { items: saved.flatMap(messageItems), tasks: [], ...contextSpend(saved) };
+  };
+  const reportPlan = async () => {
+    const found = await quota.refresh();
+    if (!found?.windows) return;
+    const said = JSON.stringify(reported);
+    reported = found.windows;
+    if (said === JSON.stringify(found.windows)) return;
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: "plan", plan: found.windows }] });
   };
   return {
     id: ID,
@@ -712,7 +897,18 @@ function create(context = {}, dependencies = {}) {
       const installed = await (dependencies.program ?? program)();
       if (!installed) return { provider: ID, here: false, signedIn: void 0 };
       const account = await rpc.account();
-      return { provider: ID, here: true, signedIn: account.state === "authenticated", program: installed };
+      const from = installFrom(installed.path);
+      const program2 = { ...installed, ...from === void 0 ? {} : { from } };
+      if (account.state !== "authenticated") return { provider: ID, here: true, signedIn: false, program: program2 };
+      const plan = await quota.windows();
+      const label = quota.label();
+      return {
+        provider: ID,
+        here: true,
+        signedIn: true,
+        program: program2,
+        ...plan === void 0 || label === void 0 ? {} : { plan: label }
+      };
     },
     models: async () => {
       const data = await rpc.request(`${API}/models/list`);
@@ -728,7 +924,11 @@ function create(context = {}, dependencies = {}) {
       }));
       return known;
     },
-    limits: async (models) => ({ windows: new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow])) }),
+    limits: async (models) => {
+      const windows = new Map(models.map((model) => [model, known.find((item) => item.value === model || item.id === model)?.contextWindow]));
+      const plan = await quota.windows();
+      return { windows, ...plan === void 0 ? {} : { plan } };
+    },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));
       return parent === row.root ? row : { ...row, project: parent };
@@ -757,7 +957,7 @@ function create(context = {}, dependencies = {}) {
       const saved = await messages(rpc, nativeId(id));
       const point = saved.findLast((message) => message.role === "assistant" && Number(message.timestamp) <= at && message.actions?.fork === true);
       if (!point) throw new Error("MCode has no completed assistant response to fork at this point.");
-      const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, "POST", { assistant_message_id: point.msg_id, client_request_id: randomUUID3(), use_suggested_title: false, create_isolated_worktree: false });
+      const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, "POST", { assistant_message_id: point.msg_id, client_request_id: randomUUID4(), use_suggested_title: false, create_isolated_worktree: false });
       if (!result.session?.session_id) throw new Error("MCode did not return the forked session.");
       const forkId = namespaced(result.session.session_id);
       return { id: forkId, begun: true, items: (await read(root, forkId)).items };
@@ -783,7 +983,18 @@ function create(context = {}, dependencies = {}) {
     remote: async () => {
       throw new Error("MCode tmux supports local projects only.");
     },
-    mcp: async () => void 0,
+    mcp: async (_root, change) => {
+      if (change !== void 0) await rpc.request(`${API}/mcp/servers/${encodeURIComponent(change.name)}/enabled`, "PATCH", { enabled: change.enabled === true });
+      const listed = await rpc.request(`${API}/mcp/servers`);
+      const runtime = await rpc.request(`${API}/mcp/runtime/servers`).catch(() => ({}));
+      const states = new Map((runtime.servers ?? []).map((server) => [server.name, server]));
+      return (listed.servers ?? []).map((server) => {
+        const state = states.get(server.name);
+        const enabled = server.enabled !== false;
+        const status = !enabled ? "disabled" : state?.authStatus === "expired" ? "needs-auth" : state === void 0 || state.configured === false ? "pending" : "connected";
+        return { name: server.name, status };
+      });
+    },
     browsers: async () => void 0,
     correct: async () => ({ ok: false, error: "Text correction is unavailable in MCode tmux." }),
     delete: async (root, id) => {
@@ -794,15 +1005,21 @@ function create(context = {}, dependencies = {}) {
     hold: (options, hear, left) => {
       if (disposed) throw new Error("MCode provider disposed.");
       let driver;
-      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear, left: () => {
+      const report = (event) => {
+        if (event.signals?.some((signal) => signal.kind === "ended")) void reportPlan();
+        hear(event);
+      };
+      driver = holdMcode({ rpc, options: { ...options, id: nativeId(options.id) }, hear: report, left: () => {
         drivers.delete(driver);
         left();
       }, log, ...dependencies.terminal });
+      driver.report = report;
       drivers.add(driver);
       return driver;
     },
     dispose: () => {
       disposed = true;
+      quota.dispose();
       void Promise.allSettled([...drivers].map((driver) => driver.end())).then(() => rpc.dispose());
     }
   };

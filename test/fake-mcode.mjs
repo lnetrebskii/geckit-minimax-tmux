@@ -21,6 +21,8 @@ if (args.includes('app-server')) {
     const id = url.pathname.match(/\/session\/(mvs_[a-z0-9]+)/)?.[1];
     let result = {}, status = 200;
     if (url.pathname.endsWith('/models/list')) result = { models: [{ provider_id: 'minimax', model_id: 'MiniMax-Test', display_name: 'Test', context_limit: 512000, max_output_tokens: 128000, selected: true }] };
+    else if (url.pathname.endsWith('/mcp/servers')) result = { servers: [{ name: 'test-server', enabled: true, transport: 'http' }] };
+    else if (url.pathname.endsWith('/mcp/runtime/servers')) result = { servers: [{ name: 'test-server', transport: 'http', enabled: true, configured: true, auth_status: 'none' }], count: 1 };
     else if (url.pathname.endsWith('/agent/mavis/session') && frame.method === 'POST') {
       const session = { session_id: 'mvs_' + randomUUID().replaceAll('-', ''), workspace_dir: body.workspace_dir, title: 'Test', created_at: Date.now(), updated_at: Date.now(), effective_model: 'minimax/MiniMax-Test' };
       save({ session, messages: [], active: false });
@@ -36,8 +38,9 @@ if (args.includes('app-server')) {
   }
   process.exit(0);
 }
-const id = args[args.indexOf('--session') + 1];
-get(id);
+const at = args.indexOf('--session');
+const id = at < 0 ? undefined : args[at + 1];
+if (id) get(id);
 let attachments = [], pasteStart = 0;
 let input = '', pasting = false, busy = false, permission = false, timer;
 const paint = (body) => process.stdout.write('\x1b[2J\x1b[H' + body);
@@ -45,15 +48,33 @@ const prompt = '    ────────────────────
 const imageLabels = () => prompt.replace('Ask Mcode to do anything', attachments.length ? attachments.map((_, i) => `[Image #${i + 1}]`).join(' ') : 'Ask Mcode to do anything');
 const idle = () => paint('[Image #1] from a previous turn\nMessage · Enter send · Ctrl+J newline\n' + imageLabels());
 const working = () => paint('[Image #1] from a previous turn\n⠋ Working · Esc interrupt\n' + imageLabels());
+const status = () => paint([
+  '╭─ MCode status ───────────────────────────────────────────────╮',
+  '│   MCode status · v0.7.4                              ● Ready   │',
+  '│   Model:        minimax/MiniMax-Test (default effort)          │',
+  '│   Account:      MiniMax123456 (Trial)                          │',
+  '│   Model source: Token Plan                                     │',
+  '│   5-hour:       [██░░░░░░░░░░░░░░░░░░░░░░] 10% left · resets in 2h 23m │',
+  '│   Weekly:       [██████████████████████░░] 90% left · resets in 5d 11h │',
+  '╰───────────────────────────────────────────────────────────────╯',
+  '',
+  '  project │ Auto │ ✦ Test │ Context 512K',
+].join('\n'));
 const message = (role, text) => {
+  if (!id) return;
   const data = get(id);
   data.messages.push({ msg_id: randomUUID(), role, msg_content: text, timestamp: Date.now(), ...(role === 'assistant' ? { finish_reason: 'stop', usage: { input_tokens: 100, output_tokens: 10, context_window: 512000 } } : {}) });
   save(data);
 };
-const active = (value) => { const data = get(id); data.active = value; save(data); busy = value; };
+const active = (value) => { if (id) { const data = get(id); data.active = value; save(data); } busy = value; };
 const reply = (text) => { message('assistant', text); active(false); idle(); };
 const submit = (text) => {
-  if (text.startsWith('/permission ') || text.startsWith('/plan ')) { idle(); return; }
+  if (text.startsWith('/permission ') || text.startsWith('/plan ')) {
+    if (id) { const data = get(id); (data.commands ??= []).push(text); save(data); }
+    idle(); return;
+  }
+  if (text === '/status') { status(); return; }
+  if (!id) { idle(); return; }
   if (attachments.length) { const data = get(id); data.receivedImages = attachments.map(path => ({ path, data: readFileSync(path).toString('base64') })); save(data); attachments = []; }
   message('user', text); active(true); working();
   if (text === 'hold') return;

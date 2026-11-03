@@ -73,7 +73,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
   if (process.platform === 'win32' || options.root.startsWith('ssh://')) throw new Error('MCode tmux requires a local macOS or Linux project.');
   const name = `geckit-minimax-${randomUUID().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory;
+  let checking = false, imagesDirectory, wanted, applying;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
   const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
   const tmux = async (args, input) => {
@@ -145,6 +145,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
         finish(stopping ? 'stopped' : last?.finish_reason === 'error' ? 'failed' : 'done');
       }
     } else idle = 0;
+    await applyPermission();
   };
   const start = async () => {
     const session = (await rpc.request(`${API}/session/${options.id}`)).session;
@@ -198,6 +199,23 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(prompt)) throw new Error('Terminal control characters are not allowed in prompts.');
     return prompt;
   };
+  // GeckIt moved the conversation between Manual and Auto while it runs.
+  // MCode is told through its own command, and only while its terminal is
+  // free: a turn in flight is never interrupted and never queued.
+  const applyPermission = (beforeSend = false) => {
+    if (applying) return applying;
+    if (!wanted || closed || !running || (!beforeSend && (turn || submitting))) return Promise.resolve();
+    applying = (async () => {
+      const requested = wanted;
+      const mode = { manual: 'ask', auto: 'auto', bypassPermissions: 'full' }[requested];
+      if (!mode || (await screen()).kind !== 'idle') return;
+      await paste(`/permission ${mode}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
+      await delay(350); await ready();
+      if (wanted === requested) wanted = undefined;
+      log('info', 'session.permission.changed', { session: options.id, mode });
+    })().finally(() => { applying = undefined; });
+    return applying;
+  };
   const attach = async (images, guard) => {
     if (!images.length) return;
     imagesDirectory ??= await mkdtemp(join(tmpdir(), 'geckit-mcode-images-'));
@@ -232,7 +250,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
       emit([], [], [{ kind: 'begun' }]);
       void (async () => {
         const fresh = started === undefined;
-        started ??= start(); await started; await ready();
+        started ??= start(); await started; await applying; await ready();
         if (fresh && options.mode) {
           const mode = { manual: 'ask', auto: 'auto', plan: 'ask', bypassPermissions: 'full' }[options.mode];
           if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
@@ -241,6 +259,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
           await paste(`/plan ${options.mode === 'plan' ? 'on' : 'off'}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
           await delay(350); await ready();
         }
+        while (wanted && !closed) { await ready(); await applyPermission(true); }
         baseline = new Set((await refresh()).map((message) => message.msg_id));
         const guard = async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); };
         await attach(images, guard);
@@ -269,6 +288,17 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
         else await paste(input(String(answer), [], []), async () => { if (closed) throw new Error('MCode closed.'); });
         resolveQuestion();
       }).catch((error) => { log('warn', 'permission.reply.failed', { error: error.name }); });
+    },
+    permit(mode, again = []) {
+      if (closed || !['manual', 'auto', 'bypassPermissions'].includes(mode)) return;
+      wanted = mode;
+      // Moving to Auto hands the waiting approval back to MCode, which then
+      // decides on its own what it may do.
+      if (mode === 'auto' && pending !== undefined && again.includes(pending.id)) {
+        const allow = pending.options.find((option) => /^Allow for this conversation$/.test(option.label));
+        if (allow !== undefined) this.answer(pending.id, allow.label);
+      }
+      void applyPermission().catch((error) => { log('warn', 'session.permission.failed', { error: error.name }); });
     },
     stop() { if (!closed && turn) { stopping = true; resolveQuestion(); void tmux(['send-keys', '-t', name, 'Escape']).catch(() => {}); } },
     end: close,

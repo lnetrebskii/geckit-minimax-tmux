@@ -6,6 +6,8 @@ Retained/adapted from that repository: `src/tmux-binary.mjs`, its tests, the tmu
 
 `src/mcode-*.mjs` implements the native MiniMax Code adapter. Protocol and terminal layouts were verified against the locally installed official `@minimax-ai/code` 0.7.4 and the official source at https://github.com/MiniMax-AI/minimax-code (retrieved 2026-11-03). No MCode runtime source or credentials are bundled. Runtime requests go to the installed MCode CLI's local app-server over stdin/stdout, while model prompts are delivered to its TUI through tmux.
 
+The plan's quota is the one thing MCode does not expose over its app-server: the DesktopService offers no account, plan or quota route, and the Token Plan's five-hour and weekly windows live in the CLI's own `/status` panel. `src/mcode-quota.mjs` reads that panel from a separate tmux session, the way the upstream Claude plugin reads `/usage`, and reports the windows and the plan's name without touching tokens or MCode's store.
+
 GeckIt contract: https://github.com/anetrebskii/geckit/blob/main/docs/provider-plugins.md, apiVersion 1.
 
 `test/fixtures/geckit-loader.mjs` contains the manifest and factory validation functions copied from the installed GeckIt `app.asar/out/main/index.js` on 2026-11-03. Host logging and identity-normalization helpers are stubbed for the independent plugin identity. This regression fixture verifies the actual installation boundary: independent `plugin:*` providers must omit the reserved `transport` metadata, even when their implementation uses tmux.

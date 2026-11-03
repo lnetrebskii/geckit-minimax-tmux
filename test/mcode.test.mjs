@@ -9,6 +9,7 @@ import { create } from '../index.mjs';
 import { terminalScreen } from '../src/mcode-terminal.mjs';
 import { nativeId, messageItems, contextSpend, messages } from '../src/mcode-history.mjs';
 import { McodeRpc } from '../src/mcode-rpc.mjs';
+import { parseQuota, quotaDuration, quotaReader } from '../src/mcode-quota.mjs';
 
 const until = async (condition) => { for (let n = 0; n < 500; n++) { if (await condition()) return; await delay(20); } throw new Error('Timed out'); };
 test('validates namespaces without accepting paths or other providers', () => {
@@ -42,6 +43,71 @@ test('recognizes native idle, work and explicit approval screens', () => {
   assert.equal(terminalScreen('╭─ Ask ─╮\nQuestion?\nType your answer · Enter send').input, true);
 });
 
+test('reads the plan from the status panel MCode shows, and nothing else', () => {
+  assert.equal(quotaDuration('2h 23m'), 2 * 3600000 + 23 * 60000);
+  assert.equal(quotaDuration('5d 11h'), 5 * 86400000 + 11 * 3600000);
+  assert.equal(quotaDuration('45m'), 45 * 60000);
+  assert.equal(quotaDuration('later'), undefined);
+  const panel = [
+    '╭─ MCode status ───────────────────────────────────────────────╮',
+    '│   Account:      MiniMax123456 (Trial)                          │',
+    '│   5-hour:       [██░░░░░░░░░░░░░░░░░░░░░░] 10% left · resets in 2h 23m │',
+    '│   Weekly:       [██████████████████████░░] 90% left · resets in 5d 11h │',
+    '╰───────────────────────────────────────────────────────────────╯',
+  ].join('\n');
+  const parsed = parseQuota(panel, 1000);
+  assert.deepEqual(parsed.windows.fiveHour, { part: 0.9, resetsAt: 1000 + 2 * 3600000 + 23 * 60000 });
+  assert.deepEqual(parsed.windows.sevenDay, { part: 0.1, resetsAt: 1000 + 5 * 86400000 + 11 * 3600000 });
+  assert.equal(parsed.label, 'Trial');
+  assert.equal(parseQuota('│   Account:      MiniMax123456 (Trial)  │'), undefined);
+  assert.equal(parseQuota(''), undefined);
+});
+
+test('the plan reaches GeckIt as limits, the account plan and MCP servers', async () => {
+  const plan = { fiveHour: { part: 0.9, resetsAt: Date.now() + 3600000 }, sevenDay: { part: 0.1, resetsAt: Date.now() + 86400000 } };
+  const quota = { windows: async () => plan, label: () => 'Trial', refresh: async () => ({ windows: plan, label: 'Trial' }), dispose() {} };
+  const rpc = { request: async (path) => {
+    if (path.endsWith('/models/list')) return { models: [{ provider_id: 'minimax', model_id: 'MiniMax-Test', display_name: 'Test', context_limit: 512000, selected: true }] };
+    if (path.endsWith('/mcp/servers')) return { servers: [{ name: 'test-server', enabled: true }] };
+    if (path.endsWith('/mcp/runtime/servers')) return { servers: [{ name: 'test-server', configured: true }] };
+    return {};
+  }, account: async () => ({ state: 'authenticated' }), dispose() {} };
+  const provider = create({}, { rpc, program: async () => ({ version: '0.7.4', path: '/Users/leonid/.minimax-code/bin/mcode' }), quota });
+  try {
+    await provider.models();
+    assert.deepEqual((await provider.limits(['minimax/MiniMax-Test'])).plan, plan);
+    assert.equal((await provider.limits(['minimax/MiniMax-Test'])).windows.get('minimax/MiniMax-Test'), 512000);
+    const account = await provider.account();
+    assert.equal(account.plan, 'Trial');
+    assert.equal(account.program.from, 'the native installer');
+    assert.deepEqual(await provider.mcp('/tmp'), [{ name: 'test-server', status: 'connected' }]);
+  } finally { provider.dispose(); }
+});
+
+test('reads the native status layout in tmux and isolates quota reader lifetimes', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-quota-'));
+  const executable = join(directory, 'mcode');
+  const fixture = new URL('./fake-mcode.mjs', import.meta.url).pathname;
+  const q = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+  await writeFile(executable, `#!/bin/sh\nexec env MCODE_TEST_DIR=${q(directory)} ${q(process.execPath)} ${q(fixture)} "$@"\n`); await chmod(executable, 0o755);
+  const server = 'mcode-quota-' + Date.now();
+  const reader = quotaReader({ name: 'geckit-mcode-quota-test', tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }), command: () => executable });
+  const unused = quotaReader({ name: 'geckit-mcode-quota-test', tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }) });
+  try {
+    const windows = await reader.windows();
+    assert.equal(windows.fiveHour.part, 0.9);
+    assert.equal(windows.sevenDay.part, 0.1);
+    assert.equal(reader.label(), 'Trial');
+    assert.ok(windows.fiveHour.resetsAt > Date.now());
+    await unused.dispose();
+    execFileSync('tmux', ['-L', server, 'has-session', '-t', 'geckit-mcode-quota-test']);
+  } finally {
+    await reader.dispose();
+    try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('fake native mcode: bundled provider, exact multiline input, permissions, stop, resume, crash and disposal', { timeout: 45000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-test-'));
   const executable = join(directory, 'mcode');
@@ -50,7 +116,7 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
   await writeFile(executable, `#!/bin/sh\nexec env MCODE_TEST_DIR=${q(directory)} ${q(process.execPath)} ${q(fixture)} "$@"\n`); await chmod(executable, 0o755);
   const server = 'mcode-test-' + Date.now();
   const rpc = new McodeRpc({ command: () => executable, timeout: 5000 });
-  const p = create({}, { rpc, program: async () => ({ version: '0.7.4' }), terminal: { command: () => executable, tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }) } });
+  const p = create({}, { rpc, program: async () => ({ version: '0.7.4' }), quota: { windows: async () => undefined, label: () => undefined, refresh: async () => undefined, dispose() {} }, terminal: { command: () => executable, tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }) } });
   let driver, resumed;
   try {
     assert.equal((await p.account()).signedIn, true);
@@ -82,7 +148,18 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     driver.send('hold'); await delay(700); await driver.inject('guidance', pictures); await until(() => ended().length === 4);
     const guided = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).receivedImages;
     assert.deepEqual(guided.map(image => image.data), pictures.map(image => image.data));
-    driver.send('hold'); await delay(700); driver.stop(); await until(() => ended().length === 5); assert.equal(ended()[4].how, 'stopped');
+    driver.permit('manual');
+    await until(async () => (JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).commands ?? []).includes('/permission ask'));
+    driver.send('hold'); await delay(700);
+    driver.permit('auto');
+    await delay(200);
+    assert.equal((JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).commands ?? []).at(-1), '/permission ask');
+    driver.stop(); await until(() => ended().length === 5); assert.equal(ended()[4].how, 'stopped');
+    await until(async () => (JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).commands ?? []).at(-1) === '/permission auto');
+    driver.permit('manual'); driver.permit('auto'); driver.permit('manual');
+    driver.send('after mode change'); await until(() => ended().length === 6);
+    assert.equal((JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).commands ?? []).at(-1), '/permission ask');
+    assert.equal((await p.read(directory, id)).items.findLast(item => item.kind === 'theirs').text, 'answer: after mode change');
     await driver.end(); assert.equal(closed, 1);
     for (const image of [...received, ...guided]) await assert.rejects(stat(image.path), { code: 'ENOENT' });
     const next = []; resumed = p.hold({ id, root: directory, resume: true }, (event) => next.push(event), () => {});

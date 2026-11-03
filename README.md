@@ -24,12 +24,38 @@ Supported operations include history, search, rename, fork at a completed assist
 
 A turn finishes only after observed activity, two idle terminal polls and MCode reporting no active session work. Stop sends Escape and waits for native work to settle. Closing a driver releases its tmux session; disposing the provider closes its drivers and its own control process. It does not kill other tmux sessions or MCode processes.
 
-GeckIt's Manual/Auto/Plan selection is applied using MCode's native `/permission` and `/plan` commands. These have the same settings effects as running those commands in MCode yourself. Model choices and context capacities are read from the installed CLI. Unknown subscription quotas and prices are omitted; reported zero model cost is not presented as a verified bill.
+GeckIt's Manual/Auto/Plan selection is applied using MCode's native `/permission` and `/plan` commands. These have the same settings effects as running those commands in MCode yourself. Model choices and context capacities are read from the installed CLI. Reported zero model cost is not presented as a verified bill.
+
+## The plan and its quota
+
+MCode keeps the state of the Token Plan in its own status panel and nowhere else: its app-server offers no account, plan or quota endpoint. The plugin reads it the way a person reads it — a TUI of its own, `mcode --tui-mode regular` in a unique `geckit-mcode-quota-*` tmux session, asked for `/status` and read from the screen. The five-hour and weekly windows it reports are given to GeckIt as the plan's windows, so the Assistants panel shows what is spent and when each window starts again. The name of the plan (`Trial`, `Pro`) is reported with the account.
+
+Nothing is invented: a window MCode does not report is left out, and no quota is shown for an account that has no plan. The reading is kept warm and refreshed after a turn, and the quota session is closed with the provider. It costs one short MCode process and no model calls.
+
+## What GeckIt may ask this provider for
+
+| Interface | Answer |
+| --- | --- |
+| `account` | Whether MCode is installed and signed in, its version, how it was installed, and the name of the plan |
+| `program` | The MCode that answers, with the version and where it came from |
+| `models` | The models MCode lists, with their context windows and effort levels |
+| `limits` | The context window of each model, and the plan's quota windows |
+| `list`, `search`, `hidden` | MCode's own sessions, found by text and by date |
+| `create`, `fork`, `has`, `read`, `links`, `rename`, `delete` | MCode's own sessions, created, forked at a finished answer, read and removed |
+| `hold` | The conversation in tmux, with permission and questionnaire cards, guidance while it works, Manual/Auto changes, and Stop |
+| `mcp` | The MCP servers MCode has, and switching them on and off |
+| `goal`, `setGoal`, `clearGoal` | Not offered: MCode keeps its own goals, and GeckIt is told so |
+| `browsers`, `correct`, `remote` | Not offered by this adapter |
+| `setInstructions` | No-op: global MCode instructions are left unchanged |
 
 ## Limits and troubleshooting
 
 - Local projects only; Windows and SSH projects are unsupported.
-- Native goal management, correction, and browser/MCP configuration from GeckIt's settings are not advertised. Tools and MCP already configured in MCode still work inside the native agent.
+- Native goal management, correction, and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
+- Publish the rebuilt bundle in a new commit on the source repository’s default branch. In GeckIt, check for library updates and apply the update; no app restart is required. Running conversations switch providers when safe. Copying local files alone does not make an update available: GeckIt compares Git commits.
+- Model pricing is unknown and omitted.
+- The plan's quota is read from MCode's `/status` panel, so the first reading waits for MCode to start. A changed CLI layout may require an adapter update.
+- Changing Manual/Auto while a conversation is running is applied to MCode through its own `/permission` command as soon as its terminal is free; a turn in flight is never interrupted and nothing is queued into it.
 - Unknown terminal dialogs remain open for manual handling. Attach with `tmux attach -t <geckit-minimax-session-name>`; list sessions with `tmux list-sessions`. Known permission and questionnaire layouts are surfaced as GeckIt question cards with separate multiline details and answer buttons. Truncated approval details offer a “Review all details” action. A changed CLI layout may require an adapter update.
 - If login expires, run `mcode login` in your terminal and retry. Do not provide an API key to this plugin.
 - The tmux download mechanism supports verified release assets, but this repository initially ships an empty binary catalog. Install tmux locally unless a later release adds your platform's binary.
