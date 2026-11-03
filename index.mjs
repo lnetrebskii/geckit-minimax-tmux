@@ -628,7 +628,6 @@ function create(context = {}, dependencies = {}) {
   return {
     id: ID,
     family: ID,
-    transport: "tmux",
     name: "MiniMax Code (tmux)",
     shortName: "MCode",
     icon: "terminal",

@@ -4,7 +4,6 @@
   "provider": {
     "id": "plugin:minimax-tmux",
     "family": "plugin:minimax-tmux",
-    "transport": "tmux",
     "name": "MiniMax Code (tmux)",
     "shortName": "MCode",
     "icon": "terminal",

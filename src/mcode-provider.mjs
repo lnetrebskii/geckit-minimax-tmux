@@ -27,7 +27,7 @@ export function create(context = {}, dependencies = {}) {
     return { items: saved.flatMap(messageItems), tasks: [], ...contextSpend(saved) };
   };
   return {
-    id: ID, family: ID, transport: 'tmux', name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
+    id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
     loginCommand: 'mcode login', planName: 'MiniMax', localOnly: true,
     available: true, subscriptionOnly: false, images: false, remoteControl: false, nativeGoals: false,
     idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async () => {},
