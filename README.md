@@ -32,6 +32,8 @@ MCode keeps the state of the Token Plan in its own status panel and nowhere else
 
 Nothing is invented: a window MCode does not report is left out, and no quota is shown for an account that has no plan. The reading is kept warm and refreshed after a turn, and the quota session is closed with the provider. It costs one short MCode process and no model calls.
 
+For the full behavioral audit, including missing integrations and the verification boundary, see [INTEGRATION-AUDIT.md](INTEGRATION-AUDIT.md). Passing loader validation alone does not mean every UI feature is supported.
+
 ## What GeckIt may ask this provider for
 
 | Interface | Answer |
@@ -42,6 +44,7 @@ Nothing is invented: a window MCode does not report is left out, and no quota is
 | `limits` | The context window of each model, and the plan's quota windows |
 | `list`, `search`, `hidden` | MCode's own sessions, found by text and by date |
 | `create`, `fork`, `has`, `read`, `links`, `rename`, `delete` | MCode's own sessions, created, forked at a finished answer, read and removed |
+| `resumeCommand` | Copy/open the native terminal continuation command: `mcode --session {id}` |
 | `hold` | The conversation in tmux, with permission and questionnaire cards, guidance while it works, Manual/Auto changes, and Stop |
 | `mcp` | The MCP servers MCode has, and switching them on and off |
 | `goal`, `setGoal`, `clearGoal` | Not offered: MCode keeps its own goals, and GeckIt is told so |
@@ -51,6 +54,7 @@ Nothing is invented: a window MCode does not report is left out, and no quota is
 ## Limits and troubleshooting
 
 - Local projects only; Windows and SSH projects are unsupported.
+- Background tasks, file-change events, saved images and native goal synchronization are not mapped into GeckIt. The GeckIt instruction switch currently has no effect; `setInstructions` is a no-op.
 - Native goal management, correction, and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
 - Publish the rebuilt bundle in a new commit on the source repository’s default branch. In GeckIt, check for library updates and apply the update; no app restart is required. Running conversations switch providers when safe. Copying local files alone does not make an update available: GeckIt compares Git commits.
 - Model pricing is unknown and omitted.

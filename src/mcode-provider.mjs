@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { McodeRpc, program } from './mcode-rpc.mjs';
 import { holdMcode } from './mcode-terminal.mjs';
 import { quotaReader } from './mcode-quota.mjs';
-import { API, ID, nativeId, namespaced, messages, messageItems, contextSpend, sessions, providerRow } from './mcode-history.mjs';
+import { API, ID, nativeId, namespaced, messages, messageItems, contextSpend, sessions, providerRow, messageLinks } from './mcode-history.mjs';
 
 const local = (root) => typeof root === 'string' && !root.startsWith('ssh://');
 const inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, '') + '/');
@@ -46,7 +46,7 @@ export function create(context = {}, dependencies = {}) {
   };
   return {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
-    loginCommand: 'mcode login', planName: 'MiniMax', localOnly: true,
+    loginCommand: 'mcode login', resumeCommand: 'mcode --session {id}', planName: 'MiniMax', localOnly: true,
     available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: false,
     idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async () => {},
     program: dependencies.program ?? program,
@@ -113,7 +113,7 @@ export function create(context = {}, dependencies = {}) {
     },
     has: async (root, id) => { try { await info(root, id); return true; } catch (error) { if (error.status === 404) return false; throw error; } },
     read,
-    links: async (root, id) => [...new Set(((await read(root, id))?.items ?? []).flatMap((item) => [...(item.text ?? '').matchAll(/https?:\/\/[^\s<>"'`)\]]+/g)].map((match) => match[0].replace(/[.,;:!?]+$/, ''))))].map((url) => ({ url })),
+    links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
     goal: async () => undefined, setGoal: async () => undefined, clearGoal: async () => {},
     rename: async (id, title) => { await rpc.request(`${API}/session/${nativeId(id)}`, 'PATCH', { title }); },
     remote: async () => { throw new Error('MCode tmux supports local projects only.'); },
@@ -126,7 +126,7 @@ export function create(context = {}, dependencies = {}) {
         const state = states.get(server.name);
         const enabled = server.enabled !== false;
         const status = !enabled ? 'disabled'
-          : state?.authStatus === 'expired' ? 'needs-auth'
+          : ['expired', 'pending_auth'].includes(state?.authStatus) ? 'needs-auth'
           : state === undefined || state.configured === false ? 'pending' : 'connected';
         return { name: server.name, status };
       });

@@ -255,6 +255,20 @@ function contextSpend(messages2) {
     }
   }
 }
+function messageLinks(items) {
+  const found = /* @__PURE__ */ new Map();
+  for (const item of [...items].reverse()) {
+    if (item.kind !== "mine" && item.kind !== "theirs") continue;
+    for (const [, text, url] of item.text.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g)) {
+      if (!found.get(url)?.text) found.set(url, text === url ? { url } : { url, text });
+    }
+    for (const [bare] of item.text.matchAll(/https?:\/\/[^\s<>"'`)\]]+/g)) {
+      const url = bare.replace(/[.,;:!?]+$/, "");
+      if (!found.has(url)) found.set(url, { url });
+    }
+  }
+  return [...found.values()];
+}
 async function messages(rpc, id) {
   const pages = [];
   let before;
@@ -880,6 +894,7 @@ function create(context = {}, dependencies = {}) {
     icon: "terminal",
     browser: "none",
     loginCommand: "mcode login",
+    resumeCommand: "mcode --session {id}",
     planName: "MiniMax",
     localOnly: true,
     available: true,
@@ -972,7 +987,7 @@ function create(context = {}, dependencies = {}) {
       }
     },
     read,
-    links: async (root, id) => [...new Set(((await read(root, id))?.items ?? []).flatMap((item) => [...(item.text ?? "").matchAll(/https?:\/\/[^\s<>"'`)\]]+/g)].map((match) => match[0].replace(/[.,;:!?]+$/, ""))))].map((url) => ({ url })),
+    links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
     goal: async () => void 0,
     setGoal: async () => void 0,
     clearGoal: async () => {
@@ -991,7 +1006,7 @@ function create(context = {}, dependencies = {}) {
       return (listed.servers ?? []).map((server) => {
         const state = states.get(server.name);
         const enabled = server.enabled !== false;
-        const status = !enabled ? "disabled" : state?.authStatus === "expired" ? "needs-auth" : state === void 0 || state.configured === false ? "pending" : "connected";
+        const status = !enabled ? "disabled" : ["expired", "pending_auth"].includes(state?.authStatus) ? "needs-auth" : state === void 0 || state.configured === false ? "pending" : "connected";
         return { name: server.name, status };
       });
     },

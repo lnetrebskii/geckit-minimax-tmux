@@ -9,6 +9,7 @@
     "icon": "terminal",
     "browser": "none",
     "loginCommand": "mcode login",
+    "resumeCommand": "mcode --session {id}",
     "planName": "MiniMax",
     "localOnly": true,
     "source": "https://github.com/lnetrebskii/geckit-minimax-tmux",

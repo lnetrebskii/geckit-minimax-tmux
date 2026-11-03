@@ -28,6 +28,22 @@ export function contextSpend(messages) {
     }
   }
 }
+// Match GeckIt's conversation Links panel: newest first, named links retain
+// their labels, and internal thoughts/tool output do not become shared links.
+export function messageLinks(items) {
+  const found = new Map();
+  for (const item of [...items].reverse()) {
+    if (item.kind !== 'mine' && item.kind !== 'theirs') continue;
+    for (const [, text, url] of item.text.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g)) {
+      if (!found.get(url)?.text) found.set(url, text === url ? { url } : { url, text });
+    }
+    for (const [bare] of item.text.matchAll(/https?:\/\/[^\s<>"'`)\]]+/g)) {
+      const url = bare.replace(/[.,;:!?]+$/, '');
+      if (!found.has(url)) found.set(url, { url });
+    }
+  }
+  return [...found.values()];
+}
 export async function messages(rpc, id) {
   const pages = [];
   let before;

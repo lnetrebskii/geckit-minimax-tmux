@@ -11,3 +11,5 @@ The plan's quota is the one thing MCode does not expose over its app-server: the
 GeckIt contract: https://github.com/anetrebskii/geckit/blob/main/docs/provider-plugins.md, apiVersion 1.
 
 `test/fixtures/geckit-loader.mjs` contains the manifest and factory validation functions copied from the installed GeckIt `app.asar/out/main/index.js` on 2026-11-03. Host logging and identity-normalization helpers are stubbed for the independent plugin identity. This regression fixture verifies the actual installation boundary: independent `plugin:*` providers must omit the reserved `transport` metadata, even when their implementation uses tmux.
+
+`test/fixtures/geckit-resume.mjs` contains the terminal resume-command formatter from the installed renderer on 2026-11-03, with provider lookup injected. `messageLinks` follows the same installed renderer’s `linksIn`/`linksInText` behavior for ordering, labels and eligible message kinds.

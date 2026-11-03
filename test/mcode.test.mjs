@@ -7,11 +7,23 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { create } from '../index.mjs';
 import { terminalScreen } from '../src/mcode-terminal.mjs';
-import { nativeId, messageItems, contextSpend, messages } from '../src/mcode-history.mjs';
+import { nativeId, messageItems, contextSpend, messages, messageLinks } from '../src/mcode-history.mjs';
 import { McodeRpc } from '../src/mcode-rpc.mjs';
 import { parseQuota, quotaDuration, quotaReader } from '../src/mcode-quota.mjs';
 
 const until = async (condition) => { for (let n = 0; n < 500; n++) { if (await condition()) return; await delay(20); } throw new Error('Timed out'); };
+test('board links match conversation links: latest first, labels retained, internal text excluded', () => {
+  assert.deepEqual(messageLinks([
+    { kind: 'mine', text: 'https://example.com/old [Old label](https://example.com/shared)' },
+    { kind: 'thought', text: 'https://internal.example.com/' },
+    { kind: 'theirs', text: '[New label](https://example.com/shared) https://example.com/new.' },
+    { kind: 'note', text: 'https://internal.example.com/note' },
+  ]), [
+    { url: 'https://example.com/shared', text: 'New label' },
+    { url: 'https://example.com/new' },
+    { url: 'https://example.com/old' },
+  ]);
+});
 test('validates namespaces without accepting paths or other providers', () => {
   assert.equal(nativeId('plugin:minimax-tmux:mvs_123'), 'mvs_123');
   for (const id of ['mvs_123', 'plugin:claude:123', 'plugin:minimax-tmux:../../auth', 'plugin:minimax-tmux:']) assert.throws(() => nativeId(id));
@@ -82,6 +94,26 @@ test('the plan reaches GeckIt as limits, the account plan and MCP servers', asyn
     assert.equal(account.program.from, 'the native installer');
     assert.deepEqual(await provider.mcp('/tmp'), [{ name: 'test-server', status: 'connected' }]);
   } finally { provider.dispose(); }
+});
+
+test('MCP authorization and disabled states take precedence over configured status', async () => {
+  const calls = [];
+  const rpc = { request: async (path, method, body) => {
+    calls.push({ path, method, body });
+    if (method === 'PATCH') return {};
+    if (path.endsWith('/runtime/servers')) return { servers: [
+      { name: 'oauth', configured: true, authStatus: 'pending_auth' },
+      { name: 'disabled', configured: true, authStatus: 'pending_auth' },
+    ] };
+    return { servers: [{ name: 'oauth' }, { name: 'disabled', enabled: false }, { name: 'unknown' }] };
+  }, dispose() {} };
+  const p = create({}, { rpc, quota: { dispose() {} } });
+  try {
+    assert.deepEqual(await p.mcp('/tmp', { name: 'server/with space', enabled: false }), [
+      { name: 'oauth', status: 'needs-auth' }, { name: 'disabled', status: 'disabled' }, { name: 'unknown', status: 'pending' },
+    ]);
+    assert.deepEqual(calls[0], { path: '/minimax-desktop/api/v1/mcp/servers/server%2Fwith%20space/enabled', method: 'PATCH', body: { enabled: false } });
+  } finally { p.dispose(); }
 });
 
 test('reads the native status layout in tmux and isolates quota reader lifetimes', { timeout: 30000 }, async () => {

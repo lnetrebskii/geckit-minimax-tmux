@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { manifestAt, loadPlugin } from './fixtures/geckit-loader.mjs';
+import { register, resumeCommand } from './fixtures/geckit-resume.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -16,6 +17,9 @@ test('published manifest and bundle pass installed GeckIt loader validation', as
     assert.equal(loaded.info.transport, undefined);
     assert.equal(loaded.provider.transport, undefined);
     assert.equal(typeof loaded.provider.hold, 'function');
+    register(loaded.info);
+    assert.equal(resumeCommand('plugin:minimax-tmux:mvs_example'), "mcode --session 'mvs_example'");
+    assert.equal(loaded.provider.resumeCommand, loaded.info.resumeCommand);
   } finally { loaded.provider.dispose(); }
 });
 
