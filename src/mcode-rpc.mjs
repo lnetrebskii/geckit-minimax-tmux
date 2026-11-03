@@ -59,6 +59,7 @@ export class McodeRpc {
     return result;
   }
   received(value) {
+    if (!value || typeof value !== 'object') return;
     if (value.id !== undefined) {
       const pending = this.pending.get(value.id);
       if (value.error) pending?.reject(new Error(`MCode RPC ${value.error.code}: ${value.error.message}`));
@@ -69,13 +70,23 @@ export class McodeRpc {
     if (value.method !== 'desktopService/transport' || !frame) return;
     const stream = this.streams.get(frame.id);
     if (!stream) return;
-    if (frame.type === 'response-start') stream.status = frame.status;
+    if (frame.type === 'response-start') {
+      if (!Number.isInteger(frame.status) || frame.status < 100 || frame.status > 599) {
+        stream.reject(new Error('Invalid MCode service status.')); return;
+      }
+      stream.status = frame.status;
+    }
     if (frame.type === 'stream-chunk') {
+      if (typeof frame.payload !== 'string' && typeof frame.payload?.data !== 'string') {
+        stream.reject(new Error('Invalid MCode service chunk.')); return;
+      }
       stream.chunks.push(typeof frame.payload === 'string' ? Buffer.from(frame.payload) : Buffer.from(frame.payload.data, 'base64'));
-      this.write({ method: 'desktopService/transport', params: { frame: { type: 'stream-credit', id: frame.id, credits: 1 } } });
+      try { this.write({ method: 'desktopService/transport', params: { frame: { type: 'stream-credit', id: frame.id, credits: 1 } } }); }
+      catch (error) { stream.reject(error); }
     }
     if (frame.type === 'stream-error') stream.reject(new Error('MCode local service failed.'));
     if (frame.type === 'stream-done') {
+      if (stream.status === undefined) { stream.reject(new Error('MCode service response has no status.')); return; }
       const text = Buffer.concat(stream.chunks).toString('utf8');
       if (stream.status >= 400) { const error = new Error(`MCode local service HTTP ${stream.status}`); error.status = stream.status; stream.reject(error); }
       else { try { stream.resolve(text ? JSON.parse(text) : {}); } catch { stream.reject(new Error('Invalid MCode service response.')); } }

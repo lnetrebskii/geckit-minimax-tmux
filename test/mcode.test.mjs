@@ -12,6 +12,26 @@ import { McodeRpc } from '../src/mcode-rpc.mjs';
 import { parseQuota, quotaDuration, quotaReader } from '../src/mcode-quota.mjs';
 
 const until = async (condition) => { for (let n = 0; n < 500; n++) { if (await condition()) return; await delay(20); } throw new Error('Timed out'); };
+const contract = JSON.parse(await readFile(new URL('./fixtures/geckit-contracts.json', import.meta.url), 'utf8'));
+function validateEvent(event) {
+  assert.ok(Array.isArray(event.items)); assert.ok(Array.isArray(event.gone)); assert.ok(Array.isArray(event.signals));
+  for (const id of event.gone) assert.equal(typeof id, 'string');
+  for (const item of event.items) {
+    assert.ok(contract.contracts.SessionItem.variants.includes(item.kind));
+    assert.equal(typeof item.id, 'string');
+    if (item.at !== undefined) assert.ok(Number.isFinite(item.at));
+    if (['mine', 'theirs', 'thought', 'note'].includes(item.kind)) assert.equal(typeof item.text, 'string');
+  }
+  for (const signal of event.signals) {
+    assert.ok(contract.contracts.Signal.variants.includes(signal.kind));
+    if (signal.kind === 'started') { nativeId(signal.session); assert.equal(typeof signal.key, 'boolean'); }
+    if (signal.kind === 'spend') {
+      if (signal.used !== undefined) assert.ok(Number.isFinite(signal.used) && signal.used >= 0);
+      if (signal.window !== undefined) assert.ok(Number.isFinite(signal.window) && signal.window > 0);
+    }
+    if (signal.kind === 'ended') assert.ok(['done', 'stopped', 'failed', 'blocked', 'limit', 'signedOut', 'offPlan'].includes(signal.how));
+  }
+}
 test('board links match conversation links: latest first, labels retained, internal text excluded', () => {
   assert.deepEqual(messageLinks([
     { kind: 'mine', text: 'https://example.com/old [Old label](https://example.com/shared)' },
@@ -73,6 +93,9 @@ test('reads the plan from the status panel MCode shows, and nothing else', () =>
   assert.equal(parsed.label, 'Trial');
   assert.equal(parseQuota('│   Account:      MiniMax123456 (Trial)  │'), undefined);
   assert.equal(parseQuota(''), undefined);
+  assert.equal(parseQuota('5-hour: 0% left · resets in 1h', 0).windows.fiveHour.part, 1);
+  assert.equal(parseQuota('Weekly: 100% left · resets in 7d', 0).windows.sevenDay.part, 0);
+  assert.equal(parseQuota('5-hour: 101% left · resets in 1h'), undefined);
 });
 
 test('the plan reaches GeckIt as limits, the account plan and MCP servers', async () => {
@@ -156,11 +179,14 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.equal((await p.limits(['minimax/MiniMax-Test'])).windows.get('minimax/MiniMax-Test'), 512000);
     const id = await p.create({ root: directory });
     const events = []; let closed = 0;
-    driver = p.hold({ id, root: directory, mode: 'auto' }, (event) => events.push(event), () => closed++);
+    const managerPrompt = "Manager's role\nKeep literal $(echo unchanged) and Unicode ю🙂";
+    driver = p.hold({ id, root: directory, mode: 'auto', managerPrompt }, (event) => events.push(event), () => closed++);
     const ended = () => events.flatMap((event) => event.signals).filter((signal) => signal.kind === 'ended');
     const prompt = "Long prompt with apostrophe ' and literal $(touch should-not-exist)\n" + 'ю🙂'.repeat(120);
     driver.send(prompt); await until(() => ended().length === 1);
     assert.equal(ended()[0].how, 'done');
+    const startupArgs = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).startupArgs;
+    assert.equal(startupArgs[startupArgs.indexOf('--append-system-prompt') + 1], managerPrompt);
     const history = await p.read(directory, id);
     assert.equal(history.items[0].text, prompt); assert.equal(history.items[1].text, 'answer: ' + prompt);
     assert.equal(p.images, true);
@@ -192,12 +218,16 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     driver.send('after mode change'); await until(() => ended().length === 6);
     assert.equal((JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).commands ?? []).at(-1), '/permission ask');
     assert.equal((await p.read(directory, id)).items.findLast(item => item.kind === 'theirs').text, 'answer: after mode change');
-    await driver.end(); assert.equal(closed, 1);
+    const ending = driver.end();
+    const endingAgain = driver.end();
+    assert.equal(ending, endingAgain);
+    await endingAgain; assert.equal(closed, 1);
     for (const image of [...received, ...guided]) await assert.rejects(stat(image.path), { code: 'ENOENT' });
     const next = []; resumed = p.hold({ id, root: directory, resume: true }, (event) => next.push(event), () => {});
     resumed.send('followup'); await until(() => next.some((event) => event.signals.some((signal) => signal.kind === 'ended' && signal.how === 'done')));
     resumed.send('crash'); await until(() => next.some((event) => event.signals.some((signal) => signal.kind === 'ended' && signal.how === 'failed')));
     assert.equal((await p.read(directory, id)).items.some((item) => item.text === 'answer: followup'), true);
+    for (const event of [...events, ...next]) validateEvent(event);
     assert.throws(() => driver.send('again'), /not ready/);
   } finally {
     await driver?.end(); await resumed?.end(); p.dispose();

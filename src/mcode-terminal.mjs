@@ -71,9 +71,10 @@ function question(detail, options, input = false) {
 
 export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
   if (process.platform === 'win32' || options.root.startsWith('ssh://')) throw new Error('MCode tmux requires a local macOS or Linux project.');
+  if (options.launch || options.fork) throw new Error('MCode tmux requires local launch and a natively forked session.');
   const name = `geckit-minimax-${randomUUID().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory, wanted, applying;
+  let checking = false, imagesDirectory, wanted, applying, closing;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
   const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
   const tmux = async (args, input) => {
@@ -114,19 +115,23 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
     emit([], [], [{ kind: 'ended', how, ...(text ? { text } : {}) }]);
     log('info', 'session.turn.ended', { session: options.id, outcome: how });
   };
-  const close = async () => {
-    if (closed) return;
+  const close = () => {
+    if (closing) return closing;
     resolveQuestion(); finish('stopped'); closed = true; clearInterval(polling);
-    await started?.catch(() => {});
-    if (running) {
-      // Let MCode release native ownership/turn locks before removing the pane.
-      await tmux(['send-keys', '-t', name, 'Escape', 'C-u', 'C-d']).catch(() => {});
-      for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
-      await tmux(['kill-session', '-t', name]).catch(() => {});
-    }
-    running = false;
-    if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
-    left(); log('info', 'session.closed', { session: options.id });
+    closing = (async () => {
+      await started?.catch(() => {});
+      if (running) {
+        // Let MCode release native ownership/turn locks before removing the pane.
+        await tmux(['send-keys', '-t', name, 'Escape', 'C-u', 'C-d']).catch(() => {});
+        for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
+        await tmux(['kill-session', '-t', name]).catch(() => {});
+      }
+      running = false;
+      try {
+        if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
+      } finally { left(); log('info', 'session.closed', { session: options.id }); }
+    })();
+    return closing;
   };
   const poll = async () => {
     if (closed || !running || submitting) return;
@@ -160,6 +165,7 @@ export function holdMcode({ rpc, options, hear, left, log = () => {}, tmuxProgra
     const env = environment();
     const args = [command(), '--session', options.id, '--tui-mode', 'regular'];
     if (options.model) args.push('--model', options.model);
+    if (options.managerPrompt) args.push('--append-system-prompt', options.managerPrompt);
     const removed = Object.keys(process.env).filter((key) => key.startsWith('GECKIT_'));
     const launch = ['exec', 'env', ...removed.flatMap((key) => ['-u', key]), `PATH=${env.PATH}`, ...['MINIMAX_DATA_DIR', 'MAVIS_DATA_DIR', 'MINIMAX_PROFILE', 'MAVIS_PROFILE'].filter((key) => env[key]).map((key) => `${key}=${env[key]}`), ...args].map(quote).join(' ');
     if (closed) return;

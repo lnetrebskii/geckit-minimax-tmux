@@ -90,6 +90,7 @@ var McodeRpc = class {
     return result;
   }
   received(value) {
+    if (!value || typeof value !== "object") return;
     if (value.id !== void 0) {
       const pending = this.pending.get(value.id);
       if (value.error) pending?.reject(new Error(`MCode RPC ${value.error.code}: ${value.error.message}`));
@@ -100,13 +101,31 @@ var McodeRpc = class {
     if (value.method !== "desktopService/transport" || !frame) return;
     const stream = this.streams.get(frame.id);
     if (!stream) return;
-    if (frame.type === "response-start") stream.status = frame.status;
+    if (frame.type === "response-start") {
+      if (!Number.isInteger(frame.status) || frame.status < 100 || frame.status > 599) {
+        stream.reject(new Error("Invalid MCode service status."));
+        return;
+      }
+      stream.status = frame.status;
+    }
     if (frame.type === "stream-chunk") {
+      if (typeof frame.payload !== "string" && typeof frame.payload?.data !== "string") {
+        stream.reject(new Error("Invalid MCode service chunk."));
+        return;
+      }
       stream.chunks.push(typeof frame.payload === "string" ? Buffer.from(frame.payload) : Buffer.from(frame.payload.data, "base64"));
-      this.write({ method: "desktopService/transport", params: { frame: { type: "stream-credit", id: frame.id, credits: 1 } } });
+      try {
+        this.write({ method: "desktopService/transport", params: { frame: { type: "stream-credit", id: frame.id, credits: 1 } } });
+      } catch (error) {
+        stream.reject(error);
+      }
     }
     if (frame.type === "stream-error") stream.reject(new Error("MCode local service failed."));
     if (frame.type === "stream-done") {
+      if (stream.status === void 0) {
+        stream.reject(new Error("MCode service response has no status."));
+        return;
+      }
       const text = Buffer.concat(stream.chunks).toString("utf8");
       if (stream.status >= 400) {
         const error = new Error(`MCode local service HTTP ${stream.status}`);
@@ -219,7 +238,10 @@ var findTmux = () => located ??= locateTmux().catch((error) => {
 // src/mcode-history.mjs
 var API = "/minimax-desktop/api/v1";
 var ID = "plugin:minimax-tmux";
-var namespaced = (id) => `${ID}:${id}`;
+var namespaced = (id) => {
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Invalid native MCode session ID.");
+  return `${ID}:${id}`;
+};
 function nativeId(id) {
   if (typeof id !== "string" || !id.startsWith(`${ID}:`) || !/^[A-Za-z0-9_-]+$/.test(id.slice(ID.length + 1))) throw new Error("Invalid MCode session ID.");
   return id.slice(ID.length + 1);
@@ -228,11 +250,12 @@ function messageItems(message) {
   const id = message.msg_id;
   if (typeof id !== "string") return [];
   const items = [];
+  const timestamp = message.timestamp == null ? void 0 : Number(message.timestamp);
   if (message.msg_content) items.push({
     kind: message.role === "user" ? "mine" : message.role === "assistant" ? "theirs" : "note",
     id,
     text: message.msg_content,
-    ...message.role === "user" || message.role === "assistant" ? { at: Number(message.timestamp) } : { note: "task" }
+    ...message.role === "user" || message.role === "assistant" ? Number.isFinite(timestamp) ? { at: timestamp } : {} : { note: "task" }
   });
   if (message.thinking_content) items.push({ kind: "thought", id: `${id}:thinking`, text: message.thinking_content });
   for (const [index, tool] of (message.tool_calls ?? []).entries()) items.push({ kind: "did", id: `${id}:tool:${tool.tool_call_id ?? tool.id ?? index}`, what: tool.tool_name ?? tool.name ?? tool.function?.name ?? "Tool", detail: JSON.stringify(tool, null, 2), live: tool.tool_call_status === 1 });
@@ -246,12 +269,12 @@ function contextSpend(messages2) {
     } catch {
       raw = {};
     }
-    const usage = raw.context_usage;
-    if (typeof usage?.usedTokens === "number") return { used: usage.usedTokens, ...typeof usage.contextWindowTokens === "number" ? { window: usage.contextWindowTokens } : {} };
+    const usage = raw?.context_usage;
+    if (Number.isFinite(usage?.usedTokens) && usage.usedTokens >= 0) return { used: usage.usedTokens, ...Number.isFinite(usage.contextWindowTokens) && usage.contextWindowTokens > 0 ? { window: usage.contextWindowTokens } : {} };
     if (message.role === "assistant" && message.usage) {
       const value = message.usage;
       const used = ["input_tokens", "output_tokens", "cache_read", "cache_write"].reduce((sum, key) => sum + (Number(value[key]) || 0), 0);
-      if (used) return { used, ...Number(value.context_window) > 0 ? { window: Number(value.context_window) } : {} };
+      if (Number.isFinite(used) && used > 0) return { used, ...Number.isFinite(Number(value.context_window)) && Number(value.context_window) > 0 ? { window: Number(value.context_window) } : {} };
     }
   }
 }
@@ -364,9 +387,10 @@ function question(detail, options, input = false) {
 function holdMcode({ rpc, options, hear, left, log = () => {
 }, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
   if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("MCode tmux requires a local macOS or Linux project.");
+  if (options.launch || options.fork) throw new Error("MCode tmux requires local launch and a natively forked session.");
   const name = `geckit-minimax-${randomUUID2().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory, wanted, applying;
+  let checking = false, imagesDirectory, wanted, applying, closing;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
   const emit = (items = [], gone = [], signals = []) => {
     if (!closed) hear({ items, gone, signals });
@@ -413,25 +437,31 @@ function holdMcode({ rpc, options, hear, left, log = () => {
     emit([], [], [{ kind: "ended", how, ...text ? { text } : {} }]);
     log("info", "session.turn.ended", { session: options.id, outcome: how });
   };
-  const close = async () => {
-    if (closed) return;
+  const close = () => {
+    if (closing) return closing;
     resolveQuestion();
     finish("stopped");
     closed = true;
     clearInterval(polling);
-    await started?.catch(() => {
-    });
-    if (running) {
-      await tmux(["send-keys", "-t", name, "Escape", "C-u", "C-d"]).catch(() => {
+    closing = (async () => {
+      await started?.catch(() => {
       });
-      for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
-      await tmux(["kill-session", "-t", name]).catch(() => {
-      });
-    }
-    running = false;
-    if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
-    left();
-    log("info", "session.closed", { session: options.id });
+      if (running) {
+        await tmux(["send-keys", "-t", name, "Escape", "C-u", "C-d"]).catch(() => {
+        });
+        for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
+        await tmux(["kill-session", "-t", name]).catch(() => {
+        });
+      }
+      running = false;
+      try {
+        if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
+      } finally {
+        left();
+        log("info", "session.closed", { session: options.id });
+      }
+    })();
+    return closing;
   };
   const poll = async () => {
     if (closed || !running || submitting) return;
@@ -474,6 +504,7 @@ function holdMcode({ rpc, options, hear, left, log = () => {
     const env = environment();
     const args = [command(), "--session", options.id, "--tui-mode", "regular"];
     if (options.model) args.push("--model", options.model);
+    if (options.managerPrompt) args.push("--append-system-prompt", options.managerPrompt);
     const removed = Object.keys(process.env).filter((key) => key.startsWith("GECKIT_"));
     const launch = ["exec", "env", ...removed.flatMap((key) => ["-u", key]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key) => env[key]).map((key) => `${key}=${env[key]}`), ...args].map(quote).join(" ");
     if (closed) return;
@@ -719,8 +750,9 @@ function parseQuota(text, now = Date.now()) {
   const windows = {};
   for (const match of plain.matchAll(/^\s*[│┃]?\s*(5-hour|Weekly)\b[^\n]*?(\d{1,3})\s*%\s*left\b[^\n]*?resets in\s+([0-9dhms]+(?:\s*[0-9dhms]+)*)/gim)) {
     const duration = quotaDuration(match[3]);
-    if (duration === void 0) continue;
-    const spent = Math.max(0, Math.min(100, 100 - Number(match[2]))) / 100;
+    const remaining = Number(match[2]);
+    if (duration === void 0 || remaining > 100) continue;
+    const spent = (100 - remaining) / 100;
     const window = { part: spent, resetsAt: now + duration };
     if (match[1].toLowerCase() === "5-hour") windows.fiveHour = window;
     else windows.sevenDay = window;
@@ -835,6 +867,7 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
 // src/mcode-provider.mjs
 var local = (root) => typeof root === "string" && !root.startsWith("ssh://");
 var inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, "") + "/");
+var positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
 var modelSelection = (value) => {
   const at = value.indexOf("/");
   if (at <= 0 || at === value.length - 1) throw new Error("Select a provider/model from MCode\u2019s model list.");
@@ -933,8 +966,8 @@ function create(context = {}, dependencies = {}) {
         name: model.display_name || model.model_id,
         isDefault: model.selected === true,
         ...model.enabled === false ? { disabled: true } : {},
-        ...Number(model.context_limit) > 0 ? { contextWindow: Number(model.context_limit) } : {},
-        ...Number(model.max_output_tokens) > 0 ? { maxOutputTokens: Number(model.max_output_tokens) } : {},
+        ...positive(model.context_limit) ? { contextWindow: Number(model.context_limit) } : {},
+        ...positive(model.max_output_tokens) ? { maxOutputTokens: Number(model.max_output_tokens) } : {},
         reasoning: (model.effort_options ?? []).filter((value) => ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(value)).map((value) => ({ value, says: value }))
       }));
       return known;

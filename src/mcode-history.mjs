@@ -1,6 +1,9 @@
 export const API = '/minimax-desktop/api/v1';
 export const ID = 'plugin:minimax-tmux';
-export const namespaced = (id) => `${ID}:${id}`;
+export const namespaced = (id) => {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid native MCode session ID.');
+  return `${ID}:${id}`;
+};
 export function nativeId(id) {
   if (typeof id !== 'string' || !id.startsWith(`${ID}:`) || !/^[A-Za-z0-9_-]+$/.test(id.slice(ID.length + 1))) throw new Error('Invalid MCode session ID.');
   return id.slice(ID.length + 1);
@@ -9,8 +12,9 @@ export function messageItems(message) {
   const id = message.msg_id;
   if (typeof id !== 'string') return [];
   const items = [];
+  const timestamp = message.timestamp == null ? undefined : Number(message.timestamp);
   if (message.msg_content) items.push({ kind: message.role === 'user' ? 'mine' : message.role === 'assistant' ? 'theirs' : 'note', id,
-    text: message.msg_content, ...(message.role === 'user' || message.role === 'assistant' ? { at: Number(message.timestamp) } : { note: 'task' }) });
+    text: message.msg_content, ...(message.role === 'user' || message.role === 'assistant' ? Number.isFinite(timestamp) ? { at: timestamp } : {} : { note: 'task' }) });
   if (message.thinking_content) items.push({ kind: 'thought', id: `${id}:thinking`, text: message.thinking_content });
   for (const [index, tool] of (message.tool_calls ?? []).entries()) items.push({ kind: 'did', id: `${id}:tool:${tool.tool_call_id ?? tool.id ?? index}`, what: tool.tool_name ?? tool.name ?? tool.function?.name ?? 'Tool', detail: JSON.stringify(tool, null, 2), live: tool.tool_call_status === 1 });
   return items;
@@ -19,12 +23,12 @@ export function contextSpend(messages) {
   for (const message of [...messages].reverse()) {
     let raw;
     try { raw = JSON.parse(message.raw_json ?? '{}'); } catch { raw = {}; }
-    const usage = raw.context_usage;
-    if (typeof usage?.usedTokens === 'number') return { used: usage.usedTokens, ...(typeof usage.contextWindowTokens === 'number' ? { window: usage.contextWindowTokens } : {}) };
+    const usage = raw?.context_usage;
+    if (Number.isFinite(usage?.usedTokens) && usage.usedTokens >= 0) return { used: usage.usedTokens, ...(Number.isFinite(usage.contextWindowTokens) && usage.contextWindowTokens > 0 ? { window: usage.contextWindowTokens } : {}) };
     if (message.role === 'assistant' && message.usage) {
       const value = message.usage;
       const used = ['input_tokens', 'output_tokens', 'cache_read', 'cache_write'].reduce((sum, key) => sum + (Number(value[key]) || 0), 0);
-      if (used) return { used, ...(Number(value.context_window) > 0 ? { window: Number(value.context_window) } : {}) };
+      if (Number.isFinite(used) && used > 0) return { used, ...(Number.isFinite(Number(value.context_window)) && Number(value.context_window) > 0 ? { window: Number(value.context_window) } : {}) };
     }
   }
 }

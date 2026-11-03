@@ -30,8 +30,9 @@ export function parseQuota(text, now = Date.now()) {
   const windows = {};
   for (const match of plain.matchAll(/^\s*[│┃]?\s*(5-hour|Weekly)\b[^\n]*?(\d{1,3})\s*%\s*left\b[^\n]*?resets in\s+([0-9dhms]+(?:\s*[0-9dhms]+)*)/gim)) {
     const duration = quotaDuration(match[3]);
-    if (duration === undefined) continue;
-    const spent = Math.max(0, Math.min(100, 100 - Number(match[2]))) / 100;
+    const remaining = Number(match[2]);
+    if (duration === undefined || remaining > 100) continue;
+    const spent = (100 - remaining) / 100;
     const window = { part: spent, resetsAt: now + duration };
     if (match[1].toLowerCase() === '5-hour') windows.fiveHour = window;
     else windows.sevenDay = window;

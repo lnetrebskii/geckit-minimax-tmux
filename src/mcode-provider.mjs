@@ -6,6 +6,7 @@ import { API, ID, nativeId, namespaced, messages, messageItems, contextSpend, se
 
 const local = (root) => typeof root === 'string' && !root.startsWith('ssh://');
 const inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, '') + '/');
+const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
 const modelSelection = (value) => {
   const at = value.indexOf('/');
   if (at <= 0 || at === value.length - 1) throw new Error('Select a provider/model from MCode’s model list.');
@@ -67,8 +68,8 @@ export function create(context = {}, dependencies = {}) {
       known = (data.models ?? []).map((model) => ({ value: `${model.provider_id}/${model.model_id}`, id: model.model_id,
         name: model.display_name || model.model_id, isDefault: model.selected === true,
         ...(model.enabled === false ? { disabled: true } : {}),
-        ...(Number(model.context_limit) > 0 ? { contextWindow: Number(model.context_limit) } : {}),
-        ...(Number(model.max_output_tokens) > 0 ? { maxOutputTokens: Number(model.max_output_tokens) } : {}),
+        ...(positive(model.context_limit) ? { contextWindow: Number(model.context_limit) } : {}),
+        ...(positive(model.max_output_tokens) ? { maxOutputTokens: Number(model.max_output_tokens) } : {}),
         reasoning: (model.effort_options ?? []).filter((value) => ['none','minimal','low','medium','high','xhigh','max','ultra'].includes(value)).map((value) => ({ value, says: value })),
       }));
       return known;

@@ -1,0 +1,778 @@
+{
+  "revision": "69ad36623228400acc4b2fa94a4368fb91033d3f",
+  "source": "https://github.com/anetrebskii/geckit",
+  "contracts": {
+    "PluginContext": {
+      "source": "main/sessions/plugin-api.ts",
+      "sourceSha256": "34ecb3b46de7e21f1ee56a60c9131411ee0fbeb3b7997572833d30a4dced0c4f",
+      "members": [
+        "log"
+      ],
+      "variants": [],
+      "declaration": "export interface PluginContext {\n  readonly log: PluginLogger\n}"
+    },
+    "PluginLogger": {
+      "source": "main/sessions/plugin-api.ts",
+      "sourceSha256": "34ecb3b46de7e21f1ee56a60c9131411ee0fbeb3b7997572833d30a4dced0c4f",
+      "members": [
+        "path",
+        "write"
+      ],
+      "variants": [],
+      "declaration": "export interface PluginLogger {\n  readonly path: string\n  write(level: PluginLogLevel, event: string, fields?: PluginLogFields): void\n}"
+    },
+    "PluginLogFields": {
+      "source": "main/sessions/plugin-api.ts",
+      "sourceSha256": "34ecb3b46de7e21f1ee56a60c9131411ee0fbeb3b7997572833d30a4dced0c4f",
+      "members": [],
+      "variants": [],
+      "declaration": "export interface PluginLogFields {\n  readonly [key: string]: PluginLogValue\n}"
+    },
+    "PluginLogLevel": {
+      "source": "main/sessions/plugin-api.ts",
+      "sourceSha256": "34ecb3b46de7e21f1ee56a60c9131411ee0fbeb3b7997572833d30a4dced0c4f",
+      "members": [],
+      "variants": [],
+      "declaration": "export type PluginLogLevel = 'debug' | 'info' | 'warn' | 'error'"
+    },
+    "PluginLogValue": {
+      "source": "main/sessions/plugin-api.ts",
+      "sourceSha256": "34ecb3b46de7e21f1ee56a60c9131411ee0fbeb3b7997572833d30a4dced0c4f",
+      "members": [],
+      "variants": [],
+      "declaration": "export type PluginLogValue = string | number | boolean | null"
+    },
+    "LlmProvider": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [
+        "available",
+        "localOnly",
+        "subscriptionOnly",
+        "images",
+        "remoteControl",
+        "nativeGoals",
+        "idleMs",
+        "waitForExit",
+        "account",
+        "program",
+        "models",
+        "limits",
+        "list",
+        "search",
+        "hidden",
+        "create",
+        "fork",
+        "has",
+        "read",
+        "links",
+        "goal",
+        "setGoal",
+        "clearGoal",
+        "pauseGoal",
+        "resumeGoal",
+        "hold",
+        "rename",
+        "remote",
+        "mcp",
+        "browsers",
+        "correct",
+        "setInstructions",
+        "delete",
+        "dispose"
+      ],
+      "variants": [],
+      "declaration": "export interface LlmProvider extends LlmProviderInfo {\n  readonly available: boolean\n  readonly localOnly: boolean\n  readonly subscriptionOnly: boolean\n  readonly images: boolean\n  readonly remoteControl: boolean\n  readonly nativeGoals: boolean\n  readonly idleMs: number\n  readonly waitForExit: boolean\n  account(): Promise<ClaudeAccount>\n  program(): Promise<ClaudeProgram | undefined>\n  models(root?: string): Promise<ClaudeModel[] | undefined>\n  limits(models: readonly string[]): Promise<ProviderLimits>\n  list(roots: readonly string[]): Promise<ProviderRow[]>\n  search(roots: readonly string[], asked: string): Promise<ChatFound[]>\n  hidden(from: number, to: number, include: (id: string) => boolean): Promise<Found[]>\n  create(options: Pick<ClaudeOptions, 'root' | 'mode' | 'model'>): Promise<string>\n  fork(root: string, id: string, at: number, mode: SessionMode, model?: string): Promise<ProviderFork>\n  has(root: string, id: string): Promise<boolean>\n  read(root: string, id: string): Promise<Conversation | undefined>\n  links(root: string, id: string): Promise<Link[]>\n  goal(root: string, id: string): Promise<ProviderGoal | undefined>\n  setGoal(id: string, objective: string): Promise<ProviderGoal | undefined>\n  clearGoal(id: string): Promise<void>\n  pauseGoal?(id: string): Promise<void>\n  resumeGoal?(id: string): Promise<void>\n  hold(options: ClaudeOptions, hear: (heard: Heard) => void, left: () => void): Driver\n  rename(id: string, name: string, driver?: Driver): Promise<void>\n  remote(driver: Driver, enabled: boolean, name?: string): Promise<string | undefined>\n  mcp(root: string, change?: McpChange, driver?: Driver): Promise<McpServer[] | undefined>\n  browsers(root?: string, pick?: string, driver?: Driver): Promise<ProviderBrowser[] | undefined>\n  correct(text: string, instruction: string, model: string): Promise<Answered>\n  setInstructions(enabled: boolean, browserNames: Readonly<Record<string, string>>): Promise<void>\n  delete(root: string, id: string): Promise<boolean>\n  dispose(): void\n}"
+    },
+    "ProviderRow": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ProviderRow = Found & { readonly root: string; readonly project?: string; readonly created?: number; readonly importedFrom?: string; readonly actualReasoning?: ReasoningEffort }"
+    },
+    "ProviderGoal": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ProviderGoal = GoalRead & { readonly status?: CodexGoal['status'] }"
+    },
+    "ProviderFork": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ProviderFork = Pick<ClaudeOptions, 'id' | 'fork'> & { readonly begun: boolean; readonly items: readonly SessionItem[] }"
+    },
+    "ProviderLimits": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ProviderLimits = Usage & Pick<ClaudeAccount, 'limits'> & Pick<ProviderUsage, 'quotas'>"
+    },
+    "ProviderBrowser": {
+      "source": "main/sessions/provider.ts",
+      "sourceSha256": "2c70f4e4239e360f7474eb068c093a3ceb3edad032b8fafe0b41b4f4531acda5",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ProviderBrowser = Pick<Browser, 'id' | 'name'> & Partial<Pick<Browser, 'current'>>"
+    },
+    "Driver": {
+      "source": "main/sessions/heard.ts",
+      "sourceSha256": "7373cc5a6c644fcaba506e9d2c80d2f541ef8fbfc94e71a50d62ed41515cb2af",
+      "members": [
+        "send",
+        "inject",
+        "answer",
+        "permit",
+        "control",
+        "stop",
+        "end",
+        "leave"
+      ],
+      "variants": [],
+      "declaration": "export interface Driver {\n  \n  send(text: string, images?: readonly SessionImage[], before?: readonly string[]): void\n  inject?(...input: Parameters<Driver['send']>): Promise<void>\n  answer(ask: string, answer: CardAnswer | string): void\n  \n  permit?(mode: 'auto' | 'manual', again: readonly string[]): void\n  \n  control?(request: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>>\n  stop(): void\n  \n  end(): Promise<void>\n  \n  leave?(): void\n}"
+    },
+    "Heard": {
+      "source": "main/sessions/heard.ts",
+      "sourceSha256": "7373cc5a6c644fcaba506e9d2c80d2f541ef8fbfc94e71a50d62ed41515cb2af",
+      "members": [
+        "items",
+        "gone",
+        "signals"
+      ],
+      "variants": [],
+      "declaration": "export interface Heard {\n  readonly items: SessionItem[]\n  readonly gone: string[]\n  readonly signals: Signal[]\n}"
+    },
+    "Signal": {
+      "source": "main/sessions/heard.ts",
+      "sourceSha256": "7373cc5a6c644fcaba506e9d2c80d2f541ef8fbfc94e71a50d62ed41515cb2af",
+      "members": [],
+      "variants": [
+        "started",
+        "doing",
+        "said",
+        "retry",
+        "writing",
+        "asks",
+        "resolved",
+        "mode",
+        "model",
+        "reasoning",
+        "spend",
+        "usage",
+        "plan",
+        "task",
+        "begun",
+        "held",
+        "goal",
+        "ended"
+      ],
+      "declaration": "export type Signal =\n  | {\n      readonly kind: 'started'\n      readonly session: string\n      readonly model?: string\n      readonly reasoning?: ReasoningEffort\n      readonly key: boolean\n      \n      readonly mode?: string\n      \n      readonly commands?: readonly string[]\n    }\n  \n  | { readonly kind: 'doing'; readonly what: string }\n  | { readonly kind: 'said'; readonly text: string }\n  | { readonly kind: 'retry'; readonly text: string | undefined }\n  \n  | { readonly kind: 'writing'; readonly paths: readonly string[] }\n  \n  | { readonly kind: 'asks'; readonly ask: string; readonly wanted: Wanted; readonly line?: string }\n  | { readonly kind: 'resolved'; readonly ask: string }\n  \n  | { readonly kind: 'mode'; readonly mode: string }\n  | { readonly kind: 'model'; readonly model: string }\n  | { readonly kind: 'reasoning'; readonly effort: ReasoningEffort }\n  \n  | ({ readonly kind: 'spend' } & SessionSpend)\n  | { readonly kind: 'usage'; readonly usage: ProviderUsage }\n  \n  | { readonly kind: 'plan'; readonly plan: PlanUsage }\n  \n  | { readonly kind: 'task'; readonly task: BackgroundTask }\n  \n  | { readonly kind: 'begun' }\n  \n  | { readonly kind: 'held'; readonly hook: string; readonly reason: string }\n  | { readonly kind: 'goal'; readonly goal: SessionGoal | undefined; readonly status?: 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete' }\n  | {\n      readonly kind: 'ended'\n      \n      readonly how: 'done' | 'stopped' | 'failed' | 'blocked' | 'limit' | 'signedOut' | 'offPlan'\n      readonly text?: string\n      \n      readonly resetsAt?: number\n    }"
+    },
+    "ClaudeOptions": {
+      "source": "main/sessions/claude.ts",
+      "sourceSha256": "981ed69c63e15234d25dd60f371e7fdd9988e0124ec1bea99c0e560020087a0d",
+      "members": [
+        "managerPrompt",
+        "reasoning",
+        "root",
+        "id",
+        "resume",
+        "mode",
+        "model",
+        "fork",
+        "launch"
+      ],
+      "variants": [],
+      "declaration": "export interface ClaudeOptions {\n  readonly managerPrompt?: string | undefined\n  readonly reasoning?: SessionMessage['reasoning']\n  readonly root: string\n  \n  readonly id: string\n  readonly resume: boolean\n  \n  readonly mode: SessionMode\n  \n  readonly model?: string\n  \n  readonly fork?: { readonly from: string; readonly at?: string }\n  \n  readonly launch?: (args: readonly string[]) => Held\n}"
+    },
+    "Held": {
+      "source": "main/sessions/claude.ts",
+      "sourceSha256": "981ed69c63e15234d25dd60f371e7fdd9988e0124ec1bea99c0e560020087a0d",
+      "members": [
+        "stdin",
+        "stdout",
+        "stderr",
+        "on",
+        "once",
+        "kill",
+        "leave"
+      ],
+      "variants": [],
+      "declaration": "export interface Held {\n  readonly stdin: Writable\n  readonly stdout: Readable\n  readonly stderr: Readable\n  on(event: 'close', listener: () => void): unknown\n  on(event: 'error', listener: (error: Error) => void): unknown\n  once(event: 'close' | 'error', listener: () => void): unknown\n  kill(): boolean\n  leave?(): void\n}"
+    },
+    "Conversation": {
+      "source": "main/sessions/disk.ts",
+      "sourceSha256": "190f6f402b686ddfe1b9427771435bab7eb2867940ea7efb1a59b23c43cd548e",
+      "members": [
+        "items",
+        "cost",
+        "goal",
+        "tasks"
+      ],
+      "variants": [],
+      "declaration": "export interface Conversation extends Pick<SessionSpend, 'window' | 'currency' | 'costKind'> {\n  readonly items: SessionItem[]\n  readonly cost?: number\n  readonly goal?: SessionGoal\n  \n  readonly tasks: BackgroundTask[]\n}"
+    },
+    "Found": {
+      "source": "main/sessions/disk.ts",
+      "sourceSha256": "190f6f402b686ddfe1b9427771435bab7eb2867940ea7efb1a59b23c43cd548e",
+      "members": [
+        "id",
+        "title",
+        "stands",
+        "at",
+        "driven",
+        "model",
+        "used",
+        "work",
+        "cwd"
+      ],
+      "variants": [],
+      "declaration": "export interface Found extends Pick<SessionSpend, 'window' | 'cost' | 'currency' | 'costKind'> {\n  readonly id: string\n  readonly title: string\n  \n  readonly stands: string\n  readonly at: number\n  \n  readonly driven: boolean\n  \n  readonly model?: string\n  \n  readonly used?: number\n  readonly work?: WorkItem\n  \n  readonly cwd?: string\n}"
+    },
+    "GoalRead": {
+      "source": "main/sessions/claude-read.ts",
+      "sourceSha256": "0216630a87fcb47d5df2688ca1b3e85c45bac511306f979ec3e6947c9878014e",
+      "members": [
+        "goal",
+        "ended",
+        "met"
+      ],
+      "variants": [
+        "note"
+      ],
+      "declaration": "export interface GoalRead {\n  readonly goal?: SessionGoal\n  \n  readonly ended?: Extract<SessionItem, { kind: 'note' }>\n  \n  readonly met?: boolean\n}"
+    },
+    "Usage": {
+      "source": "main/sessions/usage.ts",
+      "sourceSha256": "c3cb7152930f563b2902e946d460c931d5a5e4989dc53104cf8316fcc733150f",
+      "members": [
+        "plan",
+        "windows"
+      ],
+      "variants": [],
+      "declaration": "export interface Usage {\n  readonly plan?: PlanUsage\n  \n  readonly windows: ReadonlyMap<string, number | undefined>\n}"
+    },
+    "McpChange": {
+      "source": "main/sessions/mcp.ts",
+      "sourceSha256": "0bc769c11210cf3ffcd4ef137bd01698f5d235324545ad1a183386d3e1878a55",
+      "members": [
+        "name",
+        "enabled"
+      ],
+      "variants": [],
+      "declaration": "export interface McpChange {\n  readonly name: string\n  readonly enabled: boolean\n}"
+    },
+    "Wanted": {
+      "source": "main/sessions/rule.ts",
+      "sourceSha256": "cbc3efdf874cd665af7cce98426a7c00174615c3b767c64a5c42092a5c530bb9",
+      "members": [],
+      "variants": [
+        "elicitation",
+        "write",
+        "command",
+        "web",
+        "read",
+        "question",
+        "start",
+        "other"
+      ],
+      "declaration": "export type Wanted =\n  | ({ readonly kind: 'elicitation' } & Elicitation)\n  | { readonly kind: 'write'; readonly paths: readonly string[] }\n  | { readonly kind: 'command'; readonly command: string }\n  | { readonly kind: 'web'; readonly url: string }\n  | { readonly kind: 'read'; readonly path: string }\n  | { readonly kind: 'question'; readonly question: string; readonly choices: readonly string[] }\n  | { readonly kind: 'start'; readonly plan: string }\n  | { readonly kind: 'other'; readonly tool: string; readonly detail: string }"
+    },
+    "LlmProviderInfo": {
+      "source": "shared/providers.ts",
+      "sourceSha256": "da4df78e08b151f5fda3ddae0c7f5f71b47f49de380bf19bffe696fd1dac437d",
+      "members": [
+        "id",
+        "family",
+        "transport",
+        "name",
+        "shortName",
+        "icon",
+        "iconPath",
+        "browser",
+        "loginCommand",
+        "planName",
+        "resumeCommand",
+        "source",
+        "localOnly",
+        "replaces",
+        "runtime",
+        "instructions"
+      ],
+      "variants": [],
+      "declaration": "export interface LlmProviderInfo {\n  readonly id: LlmProviderId\n  readonly family: SessionProvider\n  readonly transport?: ClaudeTransport | undefined\n  readonly name: string\n  readonly shortName: string\n  readonly icon: string\n  readonly iconPath?: string\n  readonly browser: 'codex' | 'claude' | 'none'\n  readonly loginCommand: string\n  readonly planName: string\n  readonly resumeCommand?: string\n  readonly source?: string\n  readonly localOnly?: boolean\n  readonly replaces?: 'codex'\n  readonly runtime?: 'codex'\n  readonly instructions?: 'claude' | 'codex' | 'own'\n}"
+    },
+    "LlmProviderId": {
+      "source": "shared/providers.ts",
+      "sourceSha256": "da4df78e08b151f5fda3ddae0c7f5f71b47f49de380bf19bffe696fd1dac437d",
+      "members": [],
+      "variants": [],
+      "declaration": "export type LlmProviderId = 'codex' | 'claude-stream' | 'claude-tmux' | `plugin:${string}`"
+    },
+    "SessionMode": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [],
+      "declaration": "export type SessionMode = 'manual' | 'auto' | 'plan'"
+    },
+    "SessionProvider": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [],
+      "declaration": "export type SessionProvider = 'claude' | 'codex' | `plugin:${string}`"
+    },
+    "ReasoningEffort": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'"
+    },
+    "CardKind": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [],
+      "declaration": "export type CardKind = 'permission' | 'question' | 'start' | 'elicitation'"
+    },
+    "SessionCard": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "kind",
+        "title",
+        "detail",
+        "where",
+        "choices",
+        "elicitation",
+        "answered"
+      ],
+      "variants": [],
+      "declaration": "export interface SessionCard {\n  readonly kind: CardKind\n  \n  readonly title: string\n  \n  readonly detail?: string\n  \n  readonly where?: string\n  readonly choices?: readonly string[]\n  readonly elicitation?: Elicitation\n  \n  readonly answered?: string\n}"
+    },
+    "CardAnswer": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [],
+      "declaration": "export type CardAnswer = 'once' | 'session' | 'no'"
+    },
+    "SessionItem": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [
+        "mine",
+        "theirs",
+        "did",
+        "thought",
+        "shell",
+        "card",
+        "wrote",
+        "note",
+        "request",
+        "team-request",
+        "steps"
+      ],
+      "declaration": "export type SessionItem =\n  | {\n      readonly kind: 'mine'\n      readonly id: string\n      readonly text: string\n      readonly images?: readonly SessionImage[]\n      \n      readonly unsent?: boolean\n      \n      readonly at?: number\n    }\n  | { readonly kind: 'theirs'; readonly id: string; readonly text: string; readonly at?: number; readonly phase?: 'commentary' | 'final_answer' }\n  | {\n      readonly kind: 'did'\n      readonly id: string\n      \n      readonly what: string\n      \n      readonly detail?: string\n      \n      readonly path?: string\n      readonly live?: boolean\n      \n      readonly lasting?: boolean\n      \n      readonly images?: readonly SessionImage[]\n    }\n  | { readonly kind: 'thought'; readonly id: string; readonly text: string }\n  | {\n      \n      readonly kind: 'shell'\n      readonly id: string\n      readonly command: string\n      \n      readonly output: string\n      readonly running?: boolean\n      \n      readonly code?: number\n      readonly stopped?: boolean\n      \n      readonly terminal?: boolean\n      readonly at?: number\n    }\n  | { readonly kind: 'card'; readonly id: string; readonly card: SessionCard }\n  | { readonly kind: 'wrote'; readonly id: string; readonly paths: readonly string[] }\n  | {\n      readonly kind: 'note'\n      readonly id: string\n      readonly note: 'stopped' | 'limit' | 'failed' | 'summarised' | 'mode' | 'task' | 'goal'\n      readonly text: string\n      \n      readonly detail?: string\n    }\n  \n  | {\n      readonly kind: 'request'\n      readonly id: string\n      \n      readonly app?: string\n      readonly tasks: readonly RequestTask[]\n      readonly answer?: RequestAnswer\n    }\n  \n  | {\n      readonly kind: 'team-request'\n      readonly id: string\n      \n      readonly lines: readonly string[]\n      readonly answer?: TeamAnswer\n    }\n  \n  | {\n      readonly kind: 'steps'\n      \n      readonly id: string\n      readonly ids: readonly string[]\n      \n      readonly latest?: string\n      \n      readonly images?: readonly SessionImage[]\n    }"
+    },
+    "SessionSpend": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "used",
+        "window",
+        "cost",
+        "currency",
+        "costKind"
+      ],
+      "variants": [],
+      "declaration": "export interface SessionSpend {\n  readonly used?: number\n  readonly window?: number\n  readonly cost?: number\n  readonly currency?: string\n  readonly costKind?: 'api-equivalent' | 'billed'\n}"
+    },
+    "ProviderQuota": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "id",
+        "name",
+        "used",
+        "limit",
+        "unit"
+      ],
+      "variants": [],
+      "declaration": "export interface ProviderQuota extends Partial<PlanWindow> {\n  readonly id: string\n  readonly name: string\n  readonly used?: number\n  readonly limit?: number\n  readonly unit?: string\n}"
+    },
+    "ProviderUsage": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "quotas",
+        "measuredAt"
+      ],
+      "variants": [],
+      "declaration": "export interface ProviderUsage {\n  readonly quotas?: readonly ProviderQuota[]\n  readonly measuredAt?: number\n}"
+    },
+    "ModelPricing": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "currency",
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "source",
+        "asOf"
+      ],
+      "variants": [],
+      "declaration": "export interface ModelPricing {\n  readonly currency: string\n  readonly input?: number\n  readonly output?: number\n  readonly cacheRead?: number\n  readonly cacheWrite?: number\n  readonly source?: string\n  readonly asOf?: string\n}"
+    },
+    "PlanWindow": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "part",
+        "resetsAt"
+      ],
+      "variants": [],
+      "declaration": "export interface PlanWindow {\n  readonly part: number\n  readonly resetsAt: number\n}"
+    },
+    "PlanUsage": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "fiveHour",
+        "sevenDay"
+      ],
+      "variants": [],
+      "declaration": "export interface PlanUsage {\n  readonly fiveHour?: PlanWindow\n  readonly sevenDay?: PlanWindow\n}"
+    },
+    "BackgroundTask": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "id",
+        "kind",
+        "what",
+        "command",
+        "use",
+        "status",
+        "started",
+        "ended",
+        "exit",
+        "output",
+        "progress"
+      ],
+      "variants": [],
+      "declaration": "export interface BackgroundTask {\n  readonly id: string\n  \n  readonly kind: string\n  readonly what: string\n  \n  readonly command?: string\n  \n  readonly use?: string\n  readonly status: 'running' | 'completed' | 'failed' | 'stopped'\n  \n  readonly started: number\n  readonly ended?: number\n  \n  readonly exit?: number\n  \n  readonly output?: string\n  \n  readonly progress?: { readonly doing: string; readonly tools: number; readonly tokens: number }\n}"
+    },
+    "McpServer": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "name",
+        "status"
+      ],
+      "variants": [],
+      "declaration": "export interface McpServer {\n  readonly name: string\n  readonly status: string\n}"
+    },
+    "SessionImage": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "media",
+        "data",
+        "ref"
+      ],
+      "variants": [],
+      "declaration": "export interface SessionImage {\n  readonly media: string\n  \n  readonly data: string\n  readonly ref?: string\n}"
+    },
+    "ChatFound": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "id",
+        "root",
+        "said",
+        "count"
+      ],
+      "variants": [],
+      "declaration": "export interface ChatFound {\n  readonly id: string\n  readonly root: string\n  \n  readonly said: string\n  \n  readonly count: number\n}"
+    },
+    "ClaudeAccount": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "usage",
+        "provider",
+        "limits",
+        "here",
+        "signedIn",
+        "plan",
+        "key",
+        "who",
+        "program"
+      ],
+      "variants": [],
+      "declaration": "export interface ClaudeAccount {\n  readonly usage?: ProviderUsage\n  readonly provider?: SessionProvider\n  readonly limits?: readonly CodexRateLimit[]\n  \n  readonly here: boolean\n  \n  readonly signedIn: boolean | undefined\n  \n  readonly plan?: string\n  \n  readonly key?: boolean\n  \n  readonly who?: string\n  \n  readonly program?: ClaudeProgram\n}"
+    },
+    "ClaudeProgram": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "version",
+        "from",
+        "path"
+      ],
+      "variants": [],
+      "declaration": "export interface ClaudeProgram {\n  \n  readonly version: string\n  \n  readonly from?: string\n  \n  readonly path?: string\n}"
+    },
+    "ClaudeModel": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "pricing",
+        "reasoning",
+        "defaultReasoning",
+        "isDefault",
+        "value",
+        "name",
+        "says",
+        "id",
+        "version",
+        "contextWindow",
+        "maxOutputTokens",
+        "supportsAdaptiveThinking",
+        "supportsFastMode",
+        "supportsAutoMode",
+        "disabled"
+      ],
+      "variants": [],
+      "declaration": "export interface ClaudeModel {\n  readonly pricing?: ModelPricing\n  readonly reasoning?: readonly { readonly value: ReasoningEffort; readonly says: string }[]\n  readonly defaultReasoning?: ReasoningEffort\n  readonly isDefault?: boolean\n  \n  readonly value: string\n  \n  readonly name: string\n  \n  readonly says?: string\n  \n  readonly id?: string\n  \n  readonly version?: string\n  readonly contextWindow?: number\n  readonly maxOutputTokens?: number\n  readonly supportsAdaptiveThinking?: boolean\n  readonly supportsFastMode?: boolean\n  readonly supportsAutoMode?: boolean\n  \n  readonly disabled?: true\n}"
+    },
+    "SessionGoal": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "condition",
+        "checks",
+        "reason"
+      ],
+      "variants": [],
+      "declaration": "export interface SessionGoal {\n  readonly condition: string\n  \n  readonly checks: number\n  \n  readonly reason?: string\n}"
+    },
+    "Answered": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "ok",
+        "text",
+        "error",
+        "plan",
+        "heard"
+      ],
+      "variants": [],
+      "declaration": "export interface Answered {\n  readonly ok: boolean\n  readonly text?: string\n  readonly error?: string\n  \n  readonly plan?: readonly Planned[]\n  \n  readonly heard?: string\n}"
+    },
+    "CodexLimitWindow": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "usedPercent",
+        "windowDurationMins",
+        "resetsAt"
+      ],
+      "variants": [],
+      "declaration": "export interface CodexLimitWindow {\n  readonly usedPercent: number\n  readonly windowDurationMins: number | null\n  readonly resetsAt: number | null\n}"
+    },
+    "CodexRateLimit": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "limitId",
+        "limitName",
+        "normalModelSlug",
+        "primary",
+        "secondary"
+      ],
+      "variants": [],
+      "declaration": "export interface CodexRateLimit {\n  readonly limitId: string | null\n  readonly limitName: string | null\n  readonly normalModelSlug?: string | null\n  readonly primary: CodexLimitWindow | null\n  readonly secondary: CodexLimitWindow | null\n}"
+    },
+    "Link": {
+      "source": "shared/links.ts",
+      "sourceSha256": "bb410ea15340dccd412075947eb8874172f683c4271a722466a90d2559a0afb5",
+      "members": [
+        "url",
+        "text"
+      ],
+      "variants": [],
+      "declaration": "export interface Link {\n  readonly url: string\n  \n  readonly text?: string\n}"
+    },
+    "Elicitation": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [
+        "serverName",
+        "message",
+        "fields",
+        "url",
+        "error",
+        "rememberAllowed"
+      ],
+      "variants": [],
+      "declaration": "export interface Elicitation {\n  readonly serverName: string\n  readonly message: string\n  readonly fields: readonly ElicitationField[]\n  readonly url?: string\n  readonly error?: string\n  readonly rememberAllowed?: boolean\n}"
+    },
+    "WorkItem": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "label",
+        "url",
+        "says"
+      ],
+      "variants": [],
+      "declaration": "export interface WorkItem {\n  \n  readonly label: string\n  readonly url: string\n  \n  readonly says: string\n}"
+    },
+    "ElicitationField": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [
+        "name",
+        "label",
+        "description",
+        "type",
+        "required",
+        "options",
+        "default",
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "format"
+      ],
+      "variants": [],
+      "declaration": "export interface ElicitationField {\n  readonly name: string\n  readonly label: string\n  readonly description?: string\n  readonly type: 'string' | 'number' | 'integer' | 'boolean' | 'array'\n  readonly required: boolean\n  readonly options?: readonly { readonly value: string; readonly label: string }[]\n  readonly default?: ElicitationValue\n  readonly minimum?: number\n  readonly maximum?: number\n  readonly minLength?: number\n  readonly maxLength?: number\n  readonly minItems?: number\n  readonly maxItems?: number\n  readonly format?: 'email' | 'uri' | 'date' | 'date-time'\n}"
+    },
+    "ElicitationValue": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ElicitationValue = string | number | boolean | string[]"
+    },
+    "ElicitationResponse": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [
+        "action",
+        "content",
+        "_meta"
+      ],
+      "variants": [],
+      "declaration": "export interface ElicitationResponse {\n  readonly action: 'accept' | 'decline' | 'cancel'\n  readonly content: JsonObject | null\n  readonly _meta: null\n}"
+    },
+    "ElicitationAnswer": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [],
+      "variants": [],
+      "declaration": "export type ElicitationAnswer = ElicitationResponse & { readonly remember?: true }"
+    },
+    "Browser": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "id",
+        "name",
+        "current"
+      ],
+      "variants": [],
+      "declaration": "export interface Browser {\n  readonly id: string\n  readonly name: string\n  \n  readonly current: boolean\n}"
+    },
+    "RequestTask": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "provider",
+        "project",
+        "title",
+        "text",
+        "goal",
+        "started",
+        "note"
+      ],
+      "variants": [],
+      "declaration": "export interface RequestTask {\n  readonly provider?: SessionProvider\n  \n  readonly project: string\n  readonly title: string\n  readonly text: string\n  readonly goal?: string\n  \n  readonly started?: string\n  readonly note?: string\n}"
+    },
+    "RequestAnswer": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "how",
+        "where",
+        "reply"
+      ],
+      "variants": [],
+      "declaration": "export interface RequestAnswer {\n  readonly how: 'answered' | 'withdrawn'\n  \n  readonly where?: 'mac' | 'phone'\n  readonly reply?: string\n}"
+    },
+    "TeamAnswer": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [
+        "how",
+        "where",
+        "note"
+      ],
+      "variants": [],
+      "declaration": "export interface TeamAnswer {\n  readonly how: 'allowed' | 'declined' | 'withdrawn'\n  readonly where?: 'mac' | 'phone'\n  readonly note?: string\n}"
+    },
+    "TaskOutput": {
+      "source": "shared/api.ts",
+      "sourceSha256": "47424409ed7e12dc14097db77cd0c0627187cb50b7cc4ca22c078fd4fd9e4e91",
+      "members": [],
+      "variants": [
+        "printed",
+        "helper"
+      ],
+      "declaration": "export type TaskOutput =\n  | { readonly kind: 'printed'; readonly text: string }\n  | { readonly kind: 'helper'; readonly lines: readonly { readonly id: string; readonly who: 'asked' | 'said' | 'did'; readonly text: string }[] }"
+    },
+    "Json": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [],
+      "variants": [],
+      "declaration": "export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }"
+    },
+    "JsonObject": {
+      "source": "shared/elicitation.ts",
+      "sourceSha256": "6355c2388521d5a5095e8d5b89a0bd8da0109bb671e49baac8f284056e9fc75a",
+      "members": [],
+      "variants": [],
+      "declaration": "export type JsonObject = Extract<Json, { [key: string]: Json }>"
+    },
+    "CodexGoal": {
+      "source": "main/sessions/codex-protocol.ts",
+      "sourceSha256": "3028f1c3078bdfa9d70d17d4d08e4bc7bdc6bd105cabb4aeb6665806b9d2fa6f",
+      "members": [
+        "threadId",
+        "objective",
+        "status",
+        "tokenBudget",
+        "tokensUsed",
+        "timeUsedSeconds",
+        "createdAt",
+        "updatedAt"
+      ],
+      "variants": [],
+      "declaration": "export interface CodexGoal {\n  threadId: string\n  objective: string\n  status: 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete'\n  tokenBudget: number | null\n  tokensUsed: number\n  timeUsedSeconds: number\n  createdAt: number\n  updatedAt: number\n}"
+    }
+  }
+}

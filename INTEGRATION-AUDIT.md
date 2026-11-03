@@ -3,7 +3,7 @@
 The adapter implements all required apiVersion 1 factory methods, but that does
 **not** mean every GeckIt feature works with MiniMax. This audit checks the
 installed GeckIt host and renderer, the adapter sources, and MCode 0.7.4.
-It is not a claim of exhaustive desktop or phone UI testing.
+It is not a claim of exhaustive desktop or phone UI testing. The subsequent complete type/member inventory and additional regression findings are in [CONTRACT-COVERAGE.md](CONTRACT-COVERAGE.md).
 
 ## Confirmed defects fixed in this update
 
@@ -33,15 +33,15 @@ It is not a claim of exhaustive desktop or phone UI testing.
 | `limits` | Per-model context windows plus legacy `plan` quota windows, accepted by this host. Initial read waits for a separate TUI/account load; later reads are cached. Temporary native account failures can leave quotas unavailable. |
 | `list`, `search`, `hidden` | Native paginated history with root/date filtering. Search scans saved message text; it does not index tool arguments or images. |
 | `create`, `has`, `read` | Native sessions and project ownership checks. Reads map text, thinking, tools and context. `tasks` is always empty; saved image fields are not mapped. |
-| `fork` | Forks at the last eligible native assistant response at/before the supplied timestamp. No worktree creation. Not covered by the existing tmux end-to-end scenario. |
+| `fork` | Forks at the last eligible native assistant response at/before the supplied timestamp. No worktree creation. Covered by RPC contract fixtures; not exercised against a real model session. |
 | `rename` | Native PATCH is implemented. In the inspected host, UI rename calls it only for providers with `nativeGoals=true`; MiniMax uses `false`, so a UI title can remain local to GeckIt. Do not change the goals flag just to bypass that condition. |
-| `delete` | Native DELETE after project ownership validation; native history is removed too. Not tested against a real user's session. |
+| `delete` | Native DELETE after project ownership validation; native history is removed too. Ownership and DELETE behavior covered by RPC fixtures; not tested against a real user's session. |
 | `links` | Corrected above. Conversation panel uses its own host extractor; board uses provider `links`. |
 | `hold`, `send` | Native TUI in an isolated tmux session. Exact multiline input and image attachment delivery tested with fake MCode. |
 | `inject` | Guidance to an active turn; rejects idle, disconnected, submitting and permission-waiting states. Fake CLI integration coverage. |
 | `answer` | Known native permission and questionnaire layouts map to question cards. Unknown dialogs require the terminal; no automatic acceptance. |
 | `permit` | Manual/Auto applies when the terminal is idle and before a subsequent send. An in-flight turn continues under its previous mode. The host excludes question cards from `again`, so changing to Auto does not automatically answer these permission cards. |
-| `stop`, `end`, `dispose` | Stop/exit/resume tested. Driver end awaits cleanup. Provider disposal starts asynchronous cleanup but returns immediately; consumers cannot await full cleanup through its return value. |
+| `stop`, `end`, `dispose` | Stop/exit/resume tested. Driver end awaits cleanup, including concurrent/repeated calls. Provider disposal starts asynchronous cleanup but returns immediately; consumers cannot await full cleanup through its return value. |
 | Optional `control`, `leave` | Not implemented. Generic native control requests and detach semantics are unavailable; normal local shutdown uses `end`. |
 | `mcp` | Native listing and enable/disable. Authorization mapping fixed above. No GeckIt-side server installation or authorization workflow. |
 | `browsers`, `remote`, `correct` | Unsupported results/errors. Remote control and remote projects are not advertised. |

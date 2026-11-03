@@ -40,7 +40,7 @@ if (args.includes('app-server')) {
 }
 const at = args.indexOf('--session');
 const id = at < 0 ? undefined : args[at + 1];
-if (id) get(id);
+if (id) { const data = get(id); data.startupArgs = args; save(data); }
 let attachments = [], pasteStart = 0;
 let input = '', pasting = false, busy = false, permission = false, timer;
 const paint = (body) => process.stdout.write('\x1b[2J\x1b[H' + body);

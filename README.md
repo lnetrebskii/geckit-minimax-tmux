@@ -32,7 +32,7 @@ MCode keeps the state of the Token Plan in its own status panel and nowhere else
 
 Nothing is invented: a window MCode does not report is left out, and no quota is shown for an account that has no plan. The reading is kept warm and refreshed after a turn, and the quota session is closed with the provider. It costs one short MCode process and no model calls.
 
-For the full behavioral audit, including missing integrations and the verification boundary, see [INTEGRATION-AUDIT.md](INTEGRATION-AUDIT.md). Passing loader validation alone does not mean every UI feature is supported.
+For the full behavioral audit, including missing integrations and the verification boundary, see [INTEGRATION-AUDIT.md](INTEGRATION-AUDIT.md) and the [complete contract inventory](CONTRACT-COVERAGE.md). Passing loader validation alone does not mean every UI feature is supported.
 
 ## What GeckIt may ask this provider for
 
