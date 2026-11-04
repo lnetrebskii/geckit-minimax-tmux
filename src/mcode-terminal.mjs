@@ -5,11 +5,13 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { findTmux } from './tmux-binary.mjs';
+import { createLogin } from './mcode-login.mjs';
 import { mcodeCommand, mcodeEnvironment } from './mcode-rpc.mjs';
 import { messageItemsWithImages, contextSpend, messages, API, namespaced } from './mcode-history.mjs';
 import { backgroundTasks, stopTask, selectedModel, usesKey, efforts } from './mcode-state.mjs';
 
 const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+const loginInstruction = 'MiniMax Code needs sign-in. Run mcode login --region global in a terminal, complete sign-in in your browser, then resend this message. For a China account, use mcode login --region cn.';
 export function terminalScreen(text) {
   const lines = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split('\n').map((line) => line.trimEnd());
   const body = lines.join('\n');
@@ -91,6 +93,15 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   };
   const alive = () => tmux(['display-message', '-p', '-t', name, '#{pane_dead}']).then((text) => text.trim() === '0', () => false);
   const screen = async () => terminalScreen(await tmux(['capture-pane', '-p', '-t', name]));
+  const login = createLogin({ tmux, command, environment, root: options.root, account: () => rpc.account(), emit });
+  const requireLogin = async () => {
+    const model = options.model ? { provider_id: options.model.split('/')[0] } : await selectedModel(rpc, options.id);
+    // Custom providers and API keys do not require MiniMax OAuth.
+    if (await usesKey(rpc, model) === true) return;
+    if ((await rpc.account()).state === 'authenticated') return;
+    await login.run();
+    if (closed || stopping) throw new Error('MCode stopped before delivery.');
+  };
   const resolveQuestion = () => {
     if (pending) { emit([], [`card:${pending.id}`], [{ kind: 'resolved', ask: pending.id }]); pending = undefined; }
   };
@@ -141,13 +152,16 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   const finish = (how, text) => {
     if (!turn) return;
     turn = false; stopping = false; idle = 0;
+    if (how === 'signedOut') emit([{ kind: 'note', id: `mcode-signin:${randomUUID()}`, note: 'failed', text: loginInstruction }]);
     emit([], [], [{ kind: 'ended', how, ...(text ? { text } : {}) }]);
     log('info', 'session.turn.ended', { session: options.id, outcome: how });
   };
   const close = () => {
     if (closing) return closing;
+    login.cancel();
     resolveQuestion(); finish('stopped'); closed = true; clearInterval(polling);
     closing = (async () => {
+      await login.end();
       await started?.catch(() => {});
       if (running) {
         // Let MCode release native ownership/turn locks before removing the pane.
@@ -163,11 +177,12 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
     return closing;
   };
   const poll = async () => {
-    if (closed || !running || submitting) return;
+    if (closed || !running || submitting || login.active) return;
     if (!await alive()) { finish('failed', 'MCode exited.'); await close(); return; }
     const saved = await refresh();
     await refreshState();
     const shown = await screen();
+    if (turn && shown.kind === 'unknown') await requireLogin();
     if (shown.mode && shown.mode !== actualMode) { actualMode = shown.mode; emit([], [], [{ kind: 'mode', mode: actualMode }]); }
     if (shown.kind === 'question') { activity = true; idle = 0; showQuestion(shown); return; }
     resolveQuestion();
@@ -222,6 +237,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       if (closed || stopping) throw new Error('MCode stopped before delivery.');
       if (!await alive()) throw new Error('MCode exited before input. Run mcode in a terminal to check login and startup.');
       const shown = await screen();
+      if (shown.kind === 'unknown' && attempt % 30 === 0) await requireLogin();
       if (shown.kind === 'idle') { resolveQuestion(); return; }
       if (shown.kind === 'question') { showQuestion(shown); attempt = 0; }
       await delay(100);
@@ -297,6 +313,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       submitting = true; turn = true; stopping = false; activity = false; idle = 0;
       emit([], [], [{ kind: 'begun' }]);
       void (async () => {
+        await requireLogin();
         const fresh = started === undefined;
         started ??= start(); await started; await applying; await ready();
         if (fresh && options.mode) {
@@ -316,7 +333,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       })().catch(async (error) => { finish(stopping ? 'stopped' : error.status === 401 ? 'signedOut' : error.status === 429 ? 'limit' : 'failed', error.message); await close(); }).finally(() => { submitting = false; });
     },
     async inject(text, images = [], before = []) {
-      if (closed || !turn || stopping || submitting || pending) throw new Error('MCode cannot accept guidance now; the message remains queued.');
+      if (closed || !turn || stopping || submitting || pending || login.active) throw new Error('MCode cannot accept guidance now; the message remains queued.');
       const prompt = input(text, images, before);
       submitting = true;
       const guard = async () => { if (closed || !turn || stopping || !await alive() || (await screen()).kind !== 'working') throw new Error('MCode is no longer ready for guidance.'); };
@@ -325,6 +342,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       finally { submitting = false; }
     },
     answer(id, answer) {
+      if (login.answer(id, answer)) return;
       if (pending?.id !== id || closed) return;
       const current = pending;
       serial = serial.then(async () => {
@@ -348,7 +366,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       }
       void applyPermission().catch((error) => { log('warn', 'session.permission.failed', { error: error.name }); });
     },
-    stop() { if (!closed && turn) { stopping = true; resolveQuestion(); void tmux(['send-keys', '-t', name, 'Escape']).catch(() => {}); } },
+    stop() { if (!closed && turn) { stopping = true; login.cancel(); resolveQuestion(); if (running) void tmux(['send-keys', '-t', name, 'Escape']).catch(() => {}); } },
     async control(request) {
       if (closed) throw new Error('MCode is closed.');
       if (request.subtype !== 'stop_task') throw new Error(`Unsupported MCode control: ${request.subtype}`);

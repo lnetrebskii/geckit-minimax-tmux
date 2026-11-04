@@ -8,7 +8,7 @@
     "shortName": "MCode",
     "icon": "terminal",
     "browser": "none",
-    "loginCommand": "mcode login",
+    "loginCommand": "mcode login --region global",
     "resumeCommand": "mcode --session {id}",
     "planName": "MiniMax",
     "localOnly": true,

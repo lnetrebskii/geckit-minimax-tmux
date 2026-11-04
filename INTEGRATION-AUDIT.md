@@ -14,7 +14,7 @@ Scope: MiniMax tmux provider ↔ GeckIt apiVersion 1. The pinned host contracts 
 - Saved user attachments restore from native local files/data URLs. Inline tool-result images restore. Reads are bounded and image signatures checked; inaccessible files and cloud-only URLs are omitted, not fetched.
 - Native tool paths restore; completed successful write/edit operations produce wrote paths. Running write/edit calls produce writing events; changed tools/text produce doing/said.
 - Observed TUI permission mode and session-scoped selected model/effort produce state events. Unknown effort/default values are omitted. Unsolicited native working turns produce begun.
-- HTTP 401/429 during delivery/history polling map to signedOut/limit. Unknown terminal error dialogs are not classified from arbitrary text.
+- Missing OAuth before delivery offers English sign-in cards through the existing question contract. Global/China sign-in runs in a separate tmux session; native browser authorization and account verification gate continuation. Cancellation/timeout cleans up the login session. HTTP 401/429 during delivery/history polling map to signedOut/limit. Unknown terminal error dialogs are not classified from arbitrary text.
 - Known native permission/question dialogs, literal multiline prompts, image delivery, active-turn guidance, Manual/Auto changes, stop/resume and cleanup remain covered. Repeated end awaits the same cleanup.
 
 ## Remaining boundaries
@@ -33,3 +33,5 @@ These limitations are not claims of complete UI support. Enabling capability fla
 The full suite uses the copied GeckIt loader/formatter, pinned contract declarations, RPC fixtures and isolated real tmux with fake MCode. Added tests cover background task restore/output/stop errors, state emissions, source guide enable/disable, local and inline images, failed-write exclusion, billing-source distinctions and fork/model requests. Native MCode 0.7.4 was also queried read-only for account/source/model/session/task schemas, without sending model prompts or changing user history.
 
 No automated real clipboard click, phone/browser end-to-end flow, real model turn, or every MCode version is claimed. Final automated result: 47 tests passed; the final MCP snake_case authorization regression also passed after rebuilding.
+
+Sign-in release verification: 58 tests pass, including real tmux with a fake CLI, browser authorization handoff, single message delivery, cancellation and cleanup. No real-account logout was performed for testing.

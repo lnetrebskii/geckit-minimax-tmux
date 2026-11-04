@@ -1,5 +1,5 @@
 // src/mcode-provider.mjs
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 
 // src/mcode-rpc.mjs
 import { spawn, execFile } from "node:child_process";
@@ -184,8 +184,8 @@ import { execFile as execFile3 } from "node:child_process";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as join3, resolve as resolve2 } from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { setTimeout as delay2 } from "node:timers/promises";
 
 // src/tmux-binary.mjs
 import { execFile as execFile2 } from "node:child_process";
@@ -239,6 +239,118 @@ var findTmux = () => located ??= locateTmux().catch((error) => {
   located = void 0;
   throw error;
 });
+
+// src/mcode-login.mjs
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+var quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+var signInError = (text) => Object.assign(new Error(text), { status: 401 });
+function createLogin({ tmux, command, environment, root, account, emit, timeout = 3e5 }) {
+  let active, question2, choose, cancelled = false;
+  const resolveQuestion = () => {
+    if (!question2) return;
+    emit([], [`card:${question2.id}`], [{ kind: "resolved", ask: question2.id }]);
+    question2 = void 0;
+  };
+  const ask = (title, detail, choices) => {
+    resolveQuestion();
+    question2 = { id: `mcode-login:${randomUUID2()}`, choices };
+    emit([], [], [{ kind: "asks", ask: question2.id, wanted: { kind: "question", question: title, choices } }]);
+    emit([{ kind: "card", id: `card:${question2.id}`, card: { kind: "question", title, detail, choices } }]);
+  };
+  const cancel = () => {
+    cancelled = true;
+    choose?.("Cancel");
+    resolveQuestion();
+  };
+  const run = async () => {
+    cancelled = false;
+    let spawned = false;
+    const name = `geckit-minimax-login-${randomUUID2()}`;
+    try {
+      const selection = new Promise((resolve3) => {
+        choose = resolve3;
+      });
+      ask("Sign in to MiniMax Code", "Your message has not been sent. Choose your account region to open browser sign-in.", ["Sign in (Global)", "Sign in (China)", "Cancel"]);
+      const selected = await selection;
+      choose = void 0;
+      if (cancelled || selected === "Cancel") throw signInError("MiniMax sign-in cancelled. Your message has not been sent.");
+      const region = selected === "Sign in (China)" ? "cn" : "global";
+      ask("Waiting for MiniMax sign-in", "Opening browser authorization. Complete sign-in in your browser to continue.", ["Cancel"]);
+      const env = environment();
+      const removed = Object.keys(process.env).filter((key) => key.startsWith("GECKIT_"));
+      const launch = [
+        "exec",
+        "env",
+        ...removed.flatMap((key) => ["-u", key]),
+        `PATH=${env.PATH}`,
+        ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key) => env[key]).map((key) => `${key}=${env[key]}`),
+        command(),
+        "login",
+        "--region",
+        region
+      ].map(quote).join(" ");
+      await tmux(["new-session", "-d", "-s", name, "-x", "500", "-y", "40", "-c", root, launch, ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
+      spawned = true;
+      const deadline = Date.now() + timeout;
+      let displayed;
+      while (!cancelled && Date.now() < deadline) {
+        const screen = await tmux(["capture-pane", "-p", "-J", "-t", name]);
+        const candidate = screen.match(/https:\/\/account\.minimax\.(?:io|cn)\/oauth-authorize\?[^\s\x1b]+/)?.[0];
+        if (candidate && candidate !== displayed) {
+          const url = new URL(candidate);
+          if (url.hostname !== (region === "cn" ? "account.minimax.cn" : "account.minimax.io")) throw signInError("MiniMax returned a sign-in link for a different region.");
+          displayed = candidate;
+          ask("Complete MiniMax sign-in in your browser", `If the browser did not open, copy this URL:
+${candidate}
+
+Your message will continue after sign-in.`, ["Cancel"]);
+        }
+        const status = (await tmux(["display-message", "-p", "-t", name, "#{pane_dead}:#{pane_dead_status}"])).trim();
+        if (status.startsWith("1:")) {
+          if (status !== "1:0") throw signInError("MiniMax sign-in did not complete. Please try again.");
+          if ((await account()).state !== "authenticated") throw signInError("MiniMax has not confirmed sign-in. Please retry.");
+          if (cancelled) break;
+          emit([{ kind: "note", id: `mcode-login-done:${randomUUID2()}`, note: "mode", text: "Signed in to MiniMax Code. Continuing your message." }]);
+          return;
+        }
+        await delay(250);
+      }
+      throw signInError(cancelled ? "MiniMax sign-in cancelled." : "MiniMax sign-in timed out. Please try again.");
+    } finally {
+      choose = void 0;
+      resolveQuestion();
+      if (spawned) await tmux(["kill-session", "-t", name]).catch(() => {
+      });
+    }
+  };
+  return {
+    get active() {
+      return active !== void 0;
+    },
+    run() {
+      return active ??= run().finally(() => {
+        active = void 0;
+      });
+    },
+    answer(id, answer) {
+      if (question2?.id !== id) return false;
+      if (!question2.choices.includes(answer)) return true;
+      if (answer === "Cancel") cancel();
+      else {
+        choose?.(answer);
+        resolveQuestion();
+      }
+      return true;
+    },
+    cancel,
+    async end() {
+      cancel();
+      await active?.catch(() => {
+      });
+    }
+  };
+}
 
 // src/mcode-history.mjs
 import { open } from "node:fs/promises";
@@ -469,7 +581,8 @@ function quotaUsage(plan, measuredAt) {
 }
 
 // src/mcode-terminal.mjs
-var quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+var quote2 = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+var loginInstruction = "MiniMax Code needs sign-in. Run mcode login --region global in a terminal, complete sign-in in your browser, then resend this message. For a China account, use mcode login --region cn.";
 function terminalScreen(text) {
   const lines = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").split("\n").map((line) => line.trimEnd());
   const body = lines.join("\n");
@@ -532,7 +645,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
 }, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment }) {
   if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("MCode tmux requires a local macOS or Linux project.");
   if (options.launch || options.fork) throw new Error("MCode tmux requires local launch and a natively forked session.");
-  const name = `geckit-minimax-${randomUUID2().slice(0, 12)}`;
+  const name = `geckit-minimax-${randomUUID3().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
   let checking = false, imagesDirectory, wanted, applying, closing;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
@@ -549,6 +662,14 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
   };
   const alive = () => tmux(["display-message", "-p", "-t", name, "#{pane_dead}"]).then((text) => text.trim() === "0", () => false);
   const screen = async () => terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
+  const login = createLogin({ tmux, command, environment, root: options.root, account: () => rpc.account(), emit });
+  const requireLogin = async () => {
+    const model = options.model ? { provider_id: options.model.split("/")[0] } : await selectedModel(rpc, options.id);
+    if (await usesKey(rpc, model) === true) return;
+    if ((await rpc.account()).state === "authenticated") return;
+    await login.run();
+    if (closed || stopping) throw new Error("MCode stopped before delivery.");
+  };
   const resolveQuestion = () => {
     if (pending) {
       emit([], [`card:${pending.id}`], [{ kind: "resolved", ask: pending.id }]);
@@ -558,7 +679,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
   const showQuestion = (value) => {
     if (pending?.signature === value.signature) return;
     resolveQuestion();
-    pending = { ...value, id: `mcode-question:${randomUUID2()}` };
+    pending = { ...value, id: `mcode-question:${randomUUID3()}` };
     emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: value.detail, choices: value.options.map((option) => option.label) } }]);
     emit([{ kind: "card", id: `card:${pending.id}`, card: { kind: "question", title: value.title, detail: value.detail, choices: value.options.map((option) => option.label) } }]);
   };
@@ -609,22 +730,25 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     turn = false;
     stopping = false;
     idle = 0;
+    if (how === "signedOut") emit([{ kind: "note", id: `mcode-signin:${randomUUID3()}`, note: "failed", text: loginInstruction }]);
     emit([], [], [{ kind: "ended", how, ...text ? { text } : {} }]);
     log("info", "session.turn.ended", { session: options.id, outcome: how });
   };
   const close = () => {
     if (closing) return closing;
+    login.cancel();
     resolveQuestion();
     finish("stopped");
     closed = true;
     clearInterval(polling);
     closing = (async () => {
+      await login.end();
       await started?.catch(() => {
       });
       if (running) {
         await tmux(["send-keys", "-t", name, "Escape", "C-u", "C-d"]).catch(() => {
         });
-        for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay(100);
+        for (let attempt = 0; attempt < 20 && await alive(); attempt++) await delay2(100);
         await tmux(["kill-session", "-t", name]).catch(() => {
         });
       }
@@ -639,7 +763,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     return closing;
   };
   const poll = async () => {
-    if (closed || !running || submitting) return;
+    if (closed || !running || submitting || login.active) return;
     if (!await alive()) {
       finish("failed", "MCode exited.");
       await close();
@@ -648,6 +772,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     const saved = await refresh();
     await refreshState();
     const shown = await screen();
+    if (turn && shown.kind === "unknown") await requireLogin();
     if (shown.mode && shown.mode !== actualMode) {
       actualMode = shown.mode;
       emit([], [], [{ kind: "mode", mode: actualMode }]);
@@ -697,7 +822,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     const key = await usesKey(rpc, options.model ? { provider_id: options.model.split("/")[0] } : selected);
     if (key === void 0) throw new Error("MCode did not report the model billing source.");
     const removed = Object.keys(process.env).filter((key2) => key2.startsWith("GECKIT_"));
-    const launch = ["exec", "env", ...removed.flatMap((key2) => ["-u", key2]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key2) => env[key2]).map((key2) => `${key2}=${env[key2]}`), ...args].map(quote).join(" ");
+    const launch = ["exec", "env", ...removed.flatMap((key2) => ["-u", key2]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key2) => env[key2]).map((key2) => `${key2}=${env[key2]}`), ...args].map(quote2).join(" ");
     if (closed) return;
     await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch, ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
     running = true;
@@ -723,6 +848,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       if (closed || stopping) throw new Error("MCode stopped before delivery.");
       if (!await alive()) throw new Error("MCode exited before input. Run mcode in a terminal to check login and startup.");
       const shown = await screen();
+      if (shown.kind === "unknown" && attempt % 30 === 0) await requireLogin();
       if (shown.kind === "idle") {
         resolveQuestion();
         return;
@@ -731,7 +857,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
         showQuestion(shown);
         attempt = 0;
       }
-      await delay(100);
+      await delay2(100);
     }
     throw new Error(`MCode is waiting in its terminal. Attach with: tmux attach -t ${name}`);
   };
@@ -741,13 +867,13 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       if (submit) await tmux(["send-keys", "-t", name, "Enter"]);
       return;
     }
-    const buffer = `geckit-minimax-${randomUUID2()}`;
+    const buffer = `geckit-minimax-${randomUUID3()}`;
     try {
       await guard();
       await tmux(["load-buffer", "-b", buffer, "-"], text);
       await guard();
       await tmux(["paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", name]);
-      await delay(100);
+      await delay2(100);
       await guard();
       if (submit) await tmux(["send-keys", "-t", name, "Enter"]);
     } finally {
@@ -771,7 +897,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       await paste(`/permission ${mode}`, async () => {
         if (closed || stopping) throw new Error("MCode stopped.");
       });
-      await delay(350);
+      await delay2(350);
       await ready();
       if (wanted === requested) wanted = void 0;
       log("info", "session.permission.changed", { session: options.id, mode });
@@ -791,7 +917,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     };
     for (const image of images) {
       const previous2 = new Set(numbers(await capture()));
-      const path = join3(imagesDirectory, `${randomUUID2()}.${imageExtensions[image.media]}`);
+      const path = join3(imagesDirectory, `${randomUUID3()}.${imageExtensions[image.media]}`);
       await writeFile(path, Buffer.from(image.data, "base64"), { mode: 384, flag: "wx" });
       await paste(path, guard, false);
       let attached = false;
@@ -801,7 +927,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
           attached = true;
           break;
         }
-        await delay(100);
+        await delay2(100);
       }
       if (!attached) throw new Error("MCode did not accept the image attachment.");
     }
@@ -817,6 +943,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       idle = 0;
       emit([], [], [{ kind: "begun" }]);
       void (async () => {
+        await requireLogin();
         const fresh = started === void 0;
         started ??= start();
         await started;
@@ -828,12 +955,12 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
           await paste(`/permission ${mode}`, async () => {
             if (closed || stopping) throw new Error("MCode stopped.");
           });
-          await delay(350);
+          await delay2(350);
           await ready();
           await paste(`/plan ${options.mode === "plan" ? "on" : "off"}`, async () => {
             if (closed || stopping) throw new Error("MCode stopped.");
           });
-          await delay(350);
+          await delay2(350);
           await ready();
         }
         while (wanted && !closed) {
@@ -855,7 +982,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       });
     },
     async inject(text, images = [], before = []) {
-      if (closed || !turn || stopping || submitting || pending) throw new Error("MCode cannot accept guidance now; the message remains queued.");
+      if (closed || !turn || stopping || submitting || pending || login.active) throw new Error("MCode cannot accept guidance now; the message remains queued.");
       const prompt = input(text, images, before);
       submitting = true;
       const guard = async () => {
@@ -875,6 +1002,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       }
     },
     answer(id, answer) {
+      if (login.answer(id, answer)) return;
       if (pending?.id !== id || closed) return;
       const current = pending;
       serial = serial.then(async () => {
@@ -908,8 +1036,9 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     stop() {
       if (!closed && turn) {
         stopping = true;
+        login.cancel();
         resolveQuestion();
-        void tmux(["send-keys", "-t", name, "Escape"]).catch(() => {
+        if (running) void tmux(["send-keys", "-t", name, "Escape"]).catch(() => {
         });
       }
     },
@@ -939,11 +1068,11 @@ function validateImages(images = []) {
 
 // src/mcode-quota.mjs
 import { execFile as execFile4 } from "node:child_process";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 import { tmpdir as tmpdir2 } from "node:os";
-import { setTimeout as delay2 } from "node:timers/promises";
+import { setTimeout as delay3 } from "node:timers/promises";
 var MINUTE = 6e4;
-var quote2 = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+var quote3 = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 function quotaDuration(text) {
   let total = 0, found = false;
   for (const match of String(text ?? "").matchAll(/(\d+)\s*([dhms])/g)) {
@@ -969,7 +1098,7 @@ function parseQuota(text, now = Date.now()) {
   const label = account === void 0 ? void 0 : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
   return { windows, ...label ? { label } : {} };
 }
-function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {
+function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {
 }, every = 10 * MINUTE } = {}) {
   const tmux = async (args) => {
     const { file, server } = await tmuxProgram();
@@ -993,7 +1122,7 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
       command(),
       "--tui-mode",
       "regular"
-    ].map(quote2).join(" ");
+    ].map(quote3).join(" ");
     await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", tmpdir2(), command2]);
     owned = true;
   };
@@ -1002,7 +1131,7 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
       if (disposed) throw new Error("MCode provider disposed.");
       if (!await alive()) throw new Error("MCode exited before the status panel.");
       if (terminalScreen(await capture()).kind === "idle") return;
-      await delay2(100);
+      await delay3(100);
     }
     throw new Error("MCode did not become ready for /status.");
   };
@@ -1013,13 +1142,13 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID3()}`, tmuxProgram
     if (!await exists()) await launch();
     await ready();
     await tmux(["send-keys", "-t", name, "-l", "/status"]);
-    await delay2(500);
+    await delay3(500);
     await tmux(["send-keys", "-t", name, "Enter"]);
     let found;
     try {
       for (let attempt = 0; attempt < 150; attempt++) {
         if (disposed) return void 0;
-        await delay2(200);
+        await delay3(200);
         found = parseQuota(await capture());
         if (found !== void 0) break;
       }
@@ -1174,7 +1303,7 @@ function create(context = {}, dependencies = {}) {
     shortName: "MCode",
     icon: "terminal",
     browser: "none",
-    loginCommand: "mcode login",
+    loginCommand: "mcode login --region global",
     resumeCommand: "mcode --session {id}",
     planName: "MiniMax",
     localOnly: true,
@@ -1264,7 +1393,7 @@ function create(context = {}, dependencies = {}) {
       const saved = await messages(rpc, nativeId(id));
       const point = saved.findLast((message) => message.role === "assistant" && Number(message.timestamp) <= at && message.actions?.fork === true);
       if (!point) throw new Error("MCode has no completed assistant response to fork at this point.");
-      const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, "POST", { assistant_message_id: point.msg_id, client_request_id: randomUUID4(), use_suggested_title: false, create_isolated_worktree: false });
+      const result = await rpc.request(`${API}/session/${nativeId(id)}/fork`, "POST", { assistant_message_id: point.msg_id, client_request_id: randomUUID5(), use_suggested_title: false, create_isolated_worktree: false });
       if (!result.session?.session_id) throw new Error("MCode did not return the forked session.");
       const forkId = namespaced(result.session.session_id);
       if (selection) await rpc.request(`${API}/models/select`, "POST", { session_id: result.session.session_id, ...selection });

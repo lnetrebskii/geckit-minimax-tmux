@@ -8,13 +8,27 @@ const path = (id) => join(directory, id + '.json');
 const get = (id) => JSON.parse(readFileSync(path(id), 'utf8'));
 const save = (value) => writeFileSync(path(value.session.session_id), JSON.stringify(value));
 const args = process.argv.slice(2);
+const authFile = join(directory, 'auth.json');
+if (args[0] === 'login') {
+  writeFileSync(join(directory, 'login-args.json'), JSON.stringify(args));
+  console.log('Open: https://account.minimax.io/oauth-authorize?user_code=TEST-CODE');
+  console.log('Waiting for authorization…');
+  await new Promise(resolve => {
+    const timer = setInterval(() => {
+      if (!existsSync(join(directory, 'authorize'))) return;
+      writeFileSync(authFile, JSON.stringify({ state: 'authenticated' }));
+      clearInterval(timer); resolve();
+    }, 100);
+  });
+  process.exit(0);
+}
 if (args.includes('--version')) { console.log('0.7.4'); process.exit(0); }
 if (args.includes('app-server')) {
   for await (const line of createInterface({ input: process.stdin })) {
     const value = JSON.parse(line);
     const out = (reply) => process.stdout.write(JSON.stringify(reply) + '\n');
     if (value.method === 'initialize') { out({ id: value.id, result: { protocolVersion: 1 } }); continue; }
-    if (value.method === 'account/read') { out({ id: value.id, result: { state: 'authenticated' } }); continue; }
+    if (value.method === 'account/read') { out({ id: value.id, result: existsSync(authFile) ? JSON.parse(readFileSync(authFile, 'utf8')) : { state: 'authenticated' } }); continue; }
     const frame = value.params?.frame;
     if (frame?.type !== 'request') continue;
     const url = new URL(frame.url), body = frame.body ? JSON.parse(frame.body) : {};

@@ -51,7 +51,7 @@ export function create(context = {}, dependencies = {}) {
   };
   const provider = {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
-    loginCommand: 'mcode login', resumeCommand: 'mcode --session {id}', planName: 'MiniMax', localOnly: true,
+    loginCommand: 'mcode login --region global', resumeCommand: 'mcode --session {id}', planName: 'MiniMax', localOnly: true,
     available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: false,
     idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async (enabled) => { guide.set(enabled); },
     program: dependencies.program ?? program,

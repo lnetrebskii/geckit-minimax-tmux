@@ -163,6 +163,52 @@ test('reads the native status layout in tmux and isolates quota reader lifetimes
   }
 });
 
+test('sign-in from a conversation launches native login in tmux and delivers the pending message once', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-auth-'));
+  const executable = join(directory, 'mcode');
+  const fixture = new URL('./fake-mcode.mjs', import.meta.url).pathname;
+  const q = text => `'${text.replaceAll("'", "'\\''")}'`;
+  await writeFile(executable, `#!/bin/sh\nexec env MCODE_TEST_DIR=${q(directory)} ${q(process.execPath)} ${q(fixture)} "$@"\n`);
+  await chmod(executable, 0o755);
+  await writeFile(join(directory, 'auth.json'), JSON.stringify({ state: 'login_required' }));
+  const server = 'mcode-login-test-' + Date.now();
+  const rpc = new McodeRpc({ command: () => executable, timeout: 5000 });
+  const p = create({}, { rpc, quota: { dispose() {} }, terminal: { command: () => executable, tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }) } });
+  let driver;
+  try {
+    const id = await p.create({ root: directory });
+    const events = [];
+    driver = p.hold({ id, root: directory }, event => events.push(event), () => {});
+    const asks = () => events.flatMap(e => e.signals).filter(s => s.kind === 'asks');
+    driver.send('Continue after login');
+    await until(() => asks().length > 0);
+    assert.equal((await p.read(directory, id)).items.length, 0);
+    driver.answer(asks()[0].ask, 'Sign in (Global)');
+    await until(() => events.some(e => e.items.some(i => i.card?.detail?.includes('user_code=TEST-CODE'))));
+    assert.equal((await p.read(directory, id)).items.length, 0);
+    await writeFile(join(directory, 'authorize'), 'yes');
+    await until(() => events.some(e => e.signals.some(s => s.kind === 'ended' && s.how === 'done')));
+    const history = await p.read(directory, id);
+    assert.equal(history.items.filter(i => i.kind === 'mine' && i.text === 'Continue after login').length, 1);
+    assert.deepEqual(JSON.parse(await readFile(join(directory, 'login-args.json'), 'utf8')), ['login', '--region', 'global']);
+    const terminals = execFileSync('tmux', ['-L', server, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' });
+    assert.equal(terminals.includes('geckit-minimax-login-'), false);
+    // A later sign-out on the same driver must offer sign-in again; Stop
+    // cancels the pending request without ever delivering it to the agent.
+    await writeFile(join(directory, 'auth.json'), JSON.stringify({ state: 'login_required' }));
+    const previous = asks().length;
+    driver.send('Must remain unsent');
+    await until(() => asks().length > previous);
+    driver.stop();
+    await until(() => events.some(e => e.signals.some(s => s.kind === 'ended' && s.how === 'stopped')));
+    assert.equal((await p.read(directory, id)).items.some(i => i.text === 'Must remain unsent'), false);
+  } finally {
+    await driver?.end(); p.dispose();
+    try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('fake native mcode: bundled provider, exact multiline input, permissions, stop, resume, crash and disposal', { timeout: 45000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-test-'));
   const executable = join(directory, 'mcode');

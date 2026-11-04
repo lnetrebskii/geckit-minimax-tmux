@@ -4,7 +4,7 @@ Runs your locally installed **`mcode` in an interactive tmux terminal**, using y
 
 ## Install
 
-1. Install [MiniMax Code](https://github.com/MiniMax-AI/minimax-code) and complete `mcode login` if you have not already signed in. Confirm that `mcode` works in your terminal.
+1. Install [MiniMax Code](https://github.com/MiniMax-AI/minimax-code) and confirm that `mcode --version` works in your terminal. If you are not signed in, the conversation can start browser sign-in for you. You can also run `mcode login --region global` (or `--region cn` for a China account) yourself.
 2. Install tmux: `brew install tmux` on macOS, or your Linux distribution's package manager.
 3. In GeckIt, open **Settings → Libraries → Add library** and enter:
    `https://github.com/lnetrebskii/geckit-minimax-tmux`
@@ -61,7 +61,7 @@ For the full behavioral audit, including missing integrations and the verificati
 - The plan's quota is read from MCode's `/status` panel, so the first reading waits for MCode to start. A changed CLI layout may require an adapter update.
 - Changing Manual/Auto while a conversation is running is applied to MCode through its own `/permission` command as soon as its terminal is free; a turn in flight is never interrupted and nothing is queued into it.
 - Unknown terminal dialogs remain open for manual handling. Attach with `tmux attach -t <geckit-minimax-session-name>`; list sessions with `tmux list-sessions`. Known permission and questionnaire layouts are surfaced as GeckIt question cards with separate multiline details and answer buttons. Truncated approval details offer a “Review all details” action. A changed CLI layout may require an adapter update.
-- If login expires, run `mcode login` in your terminal and retry. Do not provide an API key to this plugin.
+- If login is missing before delivery, the conversation offers **Sign in (Global)**, **Sign in (China)** and **Cancel**. Sign-in runs the native `mcode login --region …` command in a separate private tmux session, opens browser authorization and shows a copyable authorization URL. The pending message continues after the CLI exits successfully and reports an authenticated account. Cancel or Stop closes the login terminal; a failed or timed-out login leaves the message unsent with a manual sign-in instruction. No command is pasted into the coding agent prompt. Do not provide an API key to this plugin.
 - The tmux download mechanism supports verified release assets, but this repository initially ships an empty binary catalog. Install tmux locally unless a later release adds your platform's binary.
 - GeckIt diagnostic events contain session IDs and outcomes, not prompts, responses or credentials.
 
