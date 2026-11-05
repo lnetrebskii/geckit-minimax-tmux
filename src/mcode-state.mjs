@@ -47,8 +47,12 @@ export async function stopTask(rpc, id, task) {
   return result;
 }
 
-export function quotaUsage(plan, measuredAt) {
+export function quotaUsage(plan, measuredAt, unavailableReason, credits) {
   if (!plan) return undefined;
-  return { quotas: Object.entries(plan).map(([id, window]) => ({ id, name: id === 'fiveHour' ? '5h' : id === 'sevenDay' ? 'Week' : id, ...window })),
-    ...(Number.isFinite(measuredAt) ? { measuredAt } : {}) };
+  return { quotas: [
+    ...Object.entries(plan).map(([id, window]) => ({ id, name: id === 'fiveHour' ? '5h' : id === 'sevenDay' ? 'Week' : id, ...window })),
+    ...(Number.isFinite(credits) && credits >= 0 ? [{ id: 'credits', name: 'Credits', remaining: credits, unit: 'credits' }] : []),
+  ],
+    ...(Number.isFinite(measuredAt) ? { measuredAt } : {}),
+    ...(unavailableReason ? { unavailableReason } : {}) };
 }

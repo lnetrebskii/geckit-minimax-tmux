@@ -98,6 +98,14 @@ test('reads the plan from the status panel MCode shows, and nothing else', () =>
   assert.equal(parseQuota('5-hour: 101% left · resets in 1h'), undefined);
 });
 
+test('distinguishes an absent Token Plan subscription from unavailable quota data', () => {
+  // Native /status after the trial ends: the model source is still Token Plan.
+  const panel = 'MCode status · v0.7.4\nAccount: MiniMax123456\nModel source: Token Plan\nQuota: No Token Plan subscription';
+  assert.deepEqual(parseQuota(panel), { windows: {}, unavailableReason: 'No active Token Plan subscription' });
+  assert.deepEqual(parseQuota('│ Quota: Temporarily unavailable │'), { windows: {}, unavailableReason: 'MiniMax is temporarily not reporting limits' });
+  assert.equal(parseQuota('Model source: Token Plan'), undefined);
+});
+
 test('the plan reaches GeckIt as limits, the account plan and MCP servers', async () => {
   const plan = { fiveHour: { part: 0.9, resetsAt: Date.now() + 3600000 }, sevenDay: { part: 0.1, resetsAt: Date.now() + 86400000 } };
   const quota = { windows: async () => plan, label: () => 'Trial', refresh: async () => ({ windows: plan, label: 'Trial' }), dispose() {} };
@@ -139,7 +147,7 @@ test('MCP authorization and disabled states take precedence over configured stat
   } finally { p.dispose(); }
 });
 
-test('reads the native status layout in tmux and isolates quota reader lifetimes', { timeout: 30000 }, async () => {
+test('reads native account usage and credits in tmux and isolates quota reader lifetimes', { timeout: 30000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-quota-'));
   const executable = join(directory, 'mcode');
   const fixture = new URL('./fake-mcode.mjs', import.meta.url).pathname;
@@ -153,6 +161,7 @@ test('reads the native status layout in tmux and isolates quota reader lifetimes
     assert.equal(windows.fiveHour.part, 0.9);
     assert.equal(windows.sevenDay.part, 0.1);
     assert.equal(reader.label(), 'Trial');
+    assert.equal(reader.credits(), 1250);
     assert.ok(windows.fiveHour.resetsAt > Date.now());
     await unused.dispose();
     execFileSync('tmux', ['-L', server, 'has-session', '-t', 'geckit-mcode-quota-test']);

@@ -20,14 +20,22 @@ export function quotaDuration(text) {
 }
 
 /**
- * What MCode's own status panel says about the plan: the share of the
- * five-hour and weekly windows that is spent, and when each starts again.
+ * What MCode's account /usage panel says about the plan and credit balance.
  * Nothing is invented: a window MCode does not report is not there.
  */
 export function parseQuota(text, now = Date.now()) {
   const plain = String(text ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .split('\n').map((line) => line.replace(/^\s*[│┃]\s?/, '').replace(/\s*[│┃]\s*$/, '')).join('\n');
   const windows = {};
+  // MCode formats Credits with en-US grouping. A missing or malformed balance
+  // stays unknown; an explicitly reported zero is a real empty balance.
+  const balance = /^[ \t]*Credits(?:[ \t]*:[ \t]*|[ \t]+)(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?[ \t]*$/im.exec(plain);
+  const amount = balance ? Number(balance[1].replaceAll(',', '') + (balance[2] ? `.${balance[2]}` : '')) : undefined;
+  const credits = Number.isFinite(amount) && amount >= 0 && amount <= Number.MAX_SAFE_INTEGER ? amount : undefined;
+  const unavailableReason = /^[ \t]*Quota(?:[ \t]*:[ \t]*|[ \t]+)No Token Plan subscription[ \t]*$/im.test(plain)
+    ? 'No active Token Plan subscription'
+    : /^[ \t]*Quota(?:[ \t]*:[ \t]*|[ \t]+)Temporarily unavailable[ \t]*$/im.test(plain)
+      ? 'MiniMax is temporarily not reporting limits' : undefined;
   for (const match of plain.matchAll(/^\s*[│┃]?\s*(5-hour|Weekly)\b[^\n]*?(\d{1,3})\s*%\s*left\b[^\n]*?resets in\s+([0-9dhms]+(?:\s*[0-9dhms]+)*)/gim)) {
     const duration = quotaDuration(match[3]);
     const remaining = Number(match[2]);
@@ -37,22 +45,22 @@ export function parseQuota(text, now = Date.now()) {
     if (match[1].toLowerCase() === '5-hour') windows.fiveHour = window;
     else windows.sevenDay = window;
   }
-  if (!windows.fiveHour && !windows.sevenDay) return undefined;
+  if (!windows.fiveHour && !windows.sevenDay && credits === undefined && !unavailableReason) return undefined;
   const account = /^\s*[│┃]?\s*Account:\s*(.+?)\s*$/im.exec(plain)?.[1];
-  const label = account === undefined ? undefined : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
-  return { windows, ...(label ? { label } : {}) };
+  const tier = /^[ \t]*Plan(?:[ \t]*:[ \t]*|[ \t]+)([^\n]+?)[ \t]*$/im.exec(plain)?.[1]?.trim();
+  const label = tier && tier !== 'Token Plan' ? tier : account === undefined ? undefined : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
+  return { windows, ...(label ? { label } : {}), ...(credits === undefined ? {} : { credits }), ...(unavailableReason ? { unavailableReason } : {}) };
 }
 
 /**
- * The plan's quota, read from the MCode that is installed on this computer.
- * MCode keeps it in its own status panel and nowhere else, so it is read the
- * way a person reads it: a TUI of its own, asked once, then kept warm.
+ * Account usage, read from the MCode installed on this computer. /usage
+ * includes the credit balance that /status omits. No model calls are sent.
  */
-export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {}, every = 10 * MINUTE } = {}) {
+export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {}, every = 10 * MINUTE, execute = execFile } = {}) {
   const tmux = async (args) => {
     const { file, server } = await tmuxProgram();
     return new Promise((resolve, reject) => {
-      execFile(file, [...server, ...args], { env: environment(), timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
+      execute(file, [...server, ...args], { env: environment(), timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve(out));
     });
   };
   const exists = () => tmux(['has-session', '-t', name]).then(() => true, () => false);
@@ -77,7 +85,7 @@ export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxP
       if (terminalScreen(await capture()).kind === 'idle') return;
       await delay(100);
     }
-    throw new Error('MCode did not become ready for /status.');
+    throw new Error('MCode did not become ready for /usage.');
   };
 
   const read = async () => {
@@ -85,7 +93,7 @@ export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxP
     if (await exists() && !await alive()) await tmux(['kill-session', '-t', name]).catch(() => {});
     if (!await exists()) await launch();
     await ready();
-    await tmux(['send-keys', '-t', name, '-l', '/status']);
+    await tmux(['send-keys', '-t', name, '-l', '/usage']);
     await delay(500);
     await tmux(['send-keys', '-t', name, 'Enter']);
     let found;
@@ -101,8 +109,8 @@ export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxP
     }
     lastRead = Date.now();
     if (found !== undefined) cached = { ...found, measuredAt: lastRead };
-    log('info', 'quota.read', { outcome: found === undefined ? 'unreadable' : 'completed', windows: found === undefined ? 0 : Object.keys(found.windows).length });
-    return found;
+    log('info', 'quota.read', { outcome: found === undefined ? 'unreadable' : 'completed', windows: found === undefined ? 0 : Object.keys(found.windows).length, creditsReported: found?.credits !== undefined });
+    return found === undefined ? undefined : cached;
   };
 
   const refresh = () => {
@@ -124,6 +132,8 @@ export function quotaReader({ name = `geckit-mcode-quota-${randomUUID()}`, tmuxP
     },
     // The name of the plan, as MCode itself names it.
     label() { return cached?.label; },
+    credits() { return cached?.credits; },
+    unavailableReason() { return cached?.unavailableReason; },
     measuredAt() { return cached?.measuredAt; },
     // Read the plan again, and say how long ago it was last read.
     async refresh() {

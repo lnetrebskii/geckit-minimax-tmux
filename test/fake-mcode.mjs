@@ -81,6 +81,22 @@ const status = () => paint([
   '',
   '  project │ Auto │ ✦ Test │ Context 512K',
 ].join('\n'));
+const accountUsage = () => {
+  const custom = join(directory, 'account-usage.txt');
+  paint(existsSync(custom) ? readFileSync(custom, 'utf8') : [
+    'Usage                                                    Account only',
+    'Model  minimax/MiniMax-Test',
+    '',
+    'This session',
+    'No token activity yet.',
+    '',
+    'Account',
+    'Plan                                                            Trial',
+    'Credits                                                         1,250',
+    '5-hour   [██░░░░░░░░░░░░░░░░░░░░░░] 10% left · resets in 2h 23m',
+    'Weekly   [██████████████████████░░] 90% left · resets in 5d 11h',
+  ].join('\n'));
+};
 const message = (role, text) => {
   if (!id) return;
   const data = get(id);
@@ -95,6 +111,7 @@ const submit = (text) => {
     idle(); return;
   }
   if (text === '/status') { status(); return; }
+  if (text === '/usage') { accountUsage(); return; }
   if (!id) { idle(); return; }
   if (attachments.length) { const data = get(id); data.receivedImages = attachments.map(path => ({ path, data: readFileSync(path).toString('base64') })); save(data); attachments = []; }
   message('user', text); active(true); working();

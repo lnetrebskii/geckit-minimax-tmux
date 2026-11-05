@@ -45,6 +45,8 @@ test('billing source and model selection are explicit and scoped to the session'
   source='unknown'; assert.equal(await usesKey(rpc,{provider_id:'minimax'}),undefined);
   assert.equal(await usesKey({request(){assert.fail('No MiniMax lookup for BYOK');}},{provider_id:'custom'}),true);
   assert.deepEqual(quotaUsage({fiveHour:{part:0.5,resetsAt:100}},42),{quotas:[{id:'fiveHour',name:'5h',part:0.5,resetsAt:100}],measuredAt:42});
+  assert.deepEqual(quotaUsage({}, 42, undefined, 1250), { quotas: [{ id: 'credits', name: 'Credits', remaining: 1250, unit: 'credits' }], measuredAt: 42 });
+  assert.equal(quotaUsage({}, 42, undefined, 0).quotas[0].remaining, 0);
 });
 
 test('BYOK account works without MiniMax OAuth and does not display subscription quota', async () => {
@@ -64,6 +66,29 @@ test('limits loads model capacity without depending on an earlier models call', 
   let calls=0;
   const provider=create({}, {rpc:{request:async()=>{calls++;return {models:[{provider_id:'minimax',model_id:'model',context_limit:5000}]};},dispose(){}},quota:{windows:async()=>undefined,dispose(){}}});
   try {assert.equal((await provider.limits(['model'])).windows.get('model'),5000);assert.equal(calls,2);}finally{provider.dispose();}
+});
+
+test('reports credit balance without an active subscription or invented usage percentages', async () => {
+  const reason = 'No active Token Plan subscription';
+  const provider = create({}, {
+    program: async () => ({ version: '0.7.4' }),
+    rpc: { account: async () => ({ state: 'authenticated' }), request: async path => path.endsWith('/models/list')
+      ? { models: [{ provider_id: 'minimax', model_id: 'm', selected: true, context_limit: 5000 }] }
+      : { active_source: 'token_plan' }, dispose() {} },
+    quota: { windows: async () => ({}), label: () => undefined, credits: () => 1250, measuredAt: () => 42, unavailableReason: () => reason, dispose() {} },
+  });
+  try {
+    const account = await provider.account();
+    assert.equal(account.signedIn, true);
+    assert.equal(account.key, false);
+    assert.deepEqual(account.usage, { quotas: [{ id: 'credits', name: 'Credits', remaining: 1250, unit: 'credits' }], measuredAt: 42, unavailableReason: reason });
+    const limits = await provider.limits(['minimax/m']);
+    assert.equal(limits.windows.get('minimax/m'), 5000);
+    assert.deepEqual(limits.quotas, account.usage.quotas);
+    assert.equal(limits.quotas[0].used, undefined);
+    assert.equal(limits.quotas[0].part, undefined);
+    assert.equal(limits.unavailableReason, reason);
+  } finally { provider.dispose(); }
 });
 
 test('instructions are opt-in, source-specific, and disable without rewriting user files', async () => {

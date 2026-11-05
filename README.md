@@ -28,9 +28,13 @@ GeckIt's Manual/Auto/Plan selection is applied using MCode's native `/permission
 
 ## The plan and its quota
 
-MCode keeps the state of the Token Plan in its own status panel and nowhere else: its app-server offers no account, plan or quota endpoint. The plugin reads it the way a person reads it — a TUI of its own, `mcode --tui-mode regular` in a unique `geckit-mcode-quota-*` tmux session, asked for `/status` and read from the screen. The five-hour and weekly windows it reports are given to GeckIt as the plan's windows, so the Assistants panel shows what is spent and when each window starts again. The name of the plan (`Trial`, `Pro`) is reported with the account.
+The plugin reads MCode's account `/usage` panel in a private `geckit-mcode-quota-*` tmux session. This panel includes both the five-hour/weekly subscription windows and the remaining credit balance; `/status` omits credits. It uses your existing MCode login, with no API key, credential extraction or model call.
 
-Nothing is invented: a window MCode does not report is left out, and no quota is shown for an account that has no plan. The reading is kept warm and refreshed after a turn, and the quota session is closed with the provider. It costs one short MCode process and no model calls.
+Subscription quota and credits are independent: credits may remain after a trial ends or when there is no active Token Plan subscription. The plugin returns subscription windows as spent fractions and credits as `{ id: 'credits', name: 'Credits', remaining: <balance>, unit: 'credits' }` in account usage, limits and refreshed usage events. A reported zero is preserved; an absent or unreadable balance stays unknown. Credit amounts have the precision shown by MCode and are not converted to tokens or percentages.
+
+Correct credit display requires GeckIt support for the optional `ProviderQuota.remaining` field. The changes in [GeckIt PR #51](https://github.com/anetrebskii/geckit/pull/51) add `1,250 credits left` style values and provider explanations when no numeric quota is available. Older GeckIt versions show an unknown value for the credit row; updating the library alone cannot add support to their renderer. The patch also supports the optional `ProviderUsage.unavailableReason` field for `No active Token Plan subscription` and temporary lookup failures.
+
+The reading is cached and refreshed after a turn. Explicit account reports replace previous windows and credit amounts, so a completed trial does not keep an obsolete quota. The quota session is closed with the provider. The `Token Plan` model source alone does not mean a subscription is active.
 
 For the full behavioral audit, including missing integrations and the verification boundary, see [INTEGRATION-AUDIT.md](INTEGRATION-AUDIT.md) and the [complete contract inventory](CONTRACT-COVERAGE.md). Passing loader validation alone does not mean every UI feature is supported.
 
@@ -41,7 +45,7 @@ For the full behavioral audit, including missing integrations and the verificati
 | `account` | Whether MCode is installed and signed in, its version, how it was installed, and the name of the plan |
 | `program` | The MCode that answers, with the version and where it came from |
 | `models` | The models MCode lists, with their context windows and effort levels |
-| `limits` | The context window of each model, and the plan's quota windows |
+| `limits` | The context window of each model, subscription quota windows, and remaining credits |
 | `list`, `search`, `hidden` | MCode's own sessions, found by text and by date |
 | `create`, `fork`, `has`, `read`, `links`, `rename`, `delete` | MCode's own sessions, created, forked at a finished answer, read and removed |
 | `resumeCommand` | Copy/open the native terminal continuation command: `mcode --session {id}` |
@@ -58,7 +62,7 @@ For the full behavioral audit, including missing integrations and the verificati
 - Native goal management, correction, and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
 - Publish the rebuilt bundle in a new commit on the source repository’s default branch. In GeckIt, check for library updates and apply the update; no app restart is required. Running conversations switch providers when safe. Copying local files alone does not make an update available: GeckIt compares Git commits.
 - Model pricing is unknown and omitted.
-- The plan's quota is read from MCode's `/status` panel, so the first reading waits for MCode to start. A changed CLI layout may require an adapter update.
+- Account quotas and credits are read from MCode's `/usage` panel, so the first reading waits for MCode to start. A changed CLI layout may require an adapter update.
 - Changing Manual/Auto while a conversation is running is applied to MCode through its own `/permission` command as soon as its terminal is free; a turn in flight is never interrupted and nothing is queued into it.
 - Unknown terminal dialogs remain open for manual handling. Attach with `tmux attach -t <geckit-minimax-session-name>`; list sessions with `tmux list-sessions`. Known permission and questionnaire layouts are surfaced as GeckIt question cards with separate multiline details and answer buttons. Truncated approval details offer a “Review all details” action. A changed CLI layout may require an adapter update.
 - If login is missing before delivery, the conversation offers **Sign in (Global)**, **Sign in (China)** and **Cancel**. Sign-in runs the native `mcode login --region …` command in a separate private tmux session, opens browser authorization and shows a copyable authorization URL. The pending message continues after the CLI exits successfully and reports an authenticated account. Cancel or Stop closes the login terminal; a failed or timed-out login leaves the message unsent with a manual sign-in instruction. No command is pasted into the coding agent prompt. Do not provide an API key to this plugin.

@@ -42,11 +42,11 @@ Pinned host source: [69ad36623228400acc4b2fa94a4368fb91033d3f](https://github.co
 | `CardAnswer` | Alias / index signature; see pinned declaration | Not emitted as permission buttons by this adapter. Answers are choice labels or free text; once/session/no are not native approval mappings. |
 | `SessionItem` | `mine`, `theirs`, `did`, `thought`, `shell`, `card`, `wrote`, `note`, `request`, `team-request`, `steps` | Text/thought/tool/note and question cards; verified saved user/tool images; native write/edit completion produces wrote. Host owns shell/request/team-request/steps grouping. Unknown assistant phases omitted. |
 | `SessionSpend` | `used`, `window`, `cost`, `currency`, `costKind` | used/window only; optional dates and null context validated after this audit. Finite nonnegative used and positive finite window. Cost/currency/costKind unknown and omitted. |
-| `ProviderQuota` | `id`, `name`, `used`, `limit`, `unit` | Generic id/name/part/resetsAt mapped from measured native status windows; unknown absolute units/limits omitted. |
-| `ProviderUsage` | `quotas`, `measuredAt` | Account usage and deduplicated usage events supplied alongside legacy plan. measuredAt included when known. |
+| `ProviderQuota` | `id`, `name`, `used`, `limit`, `unit` | Generic id/name/part/resetsAt mapped from native account usage. Credits use the optional `remaining` extension; spent/limit/percent are not invented. Rendering it requires GeckIt PR #51. |
+| `ProviderUsage` | `quotas`, `measuredAt` | Account usage and deduplicated usage events supplied alongside legacy plan. measuredAt included when known; optional unavailableReason explains an explicit missing subscription or failed lookup. |
 | `ModelPricing` | `currency`, `input`, `output`, `cacheRead`, `cacheWrite`, `source`, `asOf` | Not produced; all unknown prices omitted rather than zero. |
 | `PlanWindow` | `part`, `resetsAt` | Spent fraction plus reset timestamp. Parser tests cover zero/full usage and reset durations; values are rounded to the CLI display. |
-| `PlanUsage` | `fiveHour`, `sevenDay` | fiveHour and sevenDay, only when present in native /status. Shared account semantics; no model-specific quota split. |
+| `PlanUsage` | `fiveHour`, `sevenDay` | fiveHour and sevenDay, only when present in native /usage. Shared account semantics; no model-specific quota split. |
 | `BackgroundTask` | `id`, `kind`, `what`, `command`, `use`, `status`, `started`, `ended`, `exit`, `output`, `progress` | Native task lifecycle, command, times, exit and output-file path restored and polled. Native stop errors propagate. No guessed helper progress or send-to-background support. |
 | `McpServer` | `name`, `status` | name/status supplied. pending_auth/expired→needs-auth, disabled first, unknown runtime→pending. connected inferred from configured, not a live network probe. |
 | `SessionImage` | `media`, `data`, `ref` | Send/inject supported. Saved local/data-URL attachments and inline tool-result images restored with media/signature checks and bounded file reads. Remote/cloud-only attachments are not downloaded. |
@@ -105,7 +105,7 @@ The public export aliases are: `ProviderSessionOptions` → `ClaudeOptions`, `Pr
 Checked request methods: initialize/initialized, account/read and
 desktopService/transport. HTTP calls used by the adapter include model listing
 and selection, session create/list/read/activity/messages/fork/rename/delete,
-MCP listing/runtime/enabled. Quotas use terminal `/status`; prompts, attachments,
+MCP listing/runtime/enabled. Quotas and credits use terminal `/usage`; prompts, attachments,
 permissions and planning use native TUI input. This inventory does not claim to
 implement every DesktopService endpoint.
 

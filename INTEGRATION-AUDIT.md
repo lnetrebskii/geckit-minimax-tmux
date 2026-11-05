@@ -6,7 +6,7 @@ Scope: MiniMax tmux provider ↔ GeckIt apiVersion 1. The pinned host contracts 
 
 - Published library updates use Git commits and hot replacement; an app restart is unnecessary. Running drivers are replaced when safe.
 - The top-right Copy action has `mcode --session {id}` metadata. Links preserve labels, deduplicate, and list newest first.
-- Quotas come from native `/status`, with both legacy plan windows and generic usage/quotas. Their first read waits for account loading. No model call is used.
+- Quotas and credit balances come from native `/usage`, with both legacy plan windows and generic usage/quotas. Their first read waits for account loading. No model call is used.
 - Account/startup billing distinguishes Token Plan, MiniMax API key and custom providers. Unknown billing source does not silently become a subscription. Subscription quota is not shown for API-key accounts. Opaque account identity is unavailable from native account/read and is omitted.
 - Native session CRUD, root isolation, pagination and fork point checks. Fork now applies a requested model. Context capacities load even if limits is called before models. Executable paths resolve symlinks.
 - Background tasks restore on read and emit changed task events. Native lifecycle, command, timestamps, exit code and absolute output-file path are mapped. The host reads that file for task output. Stop uses the native task endpoint and reports operation errors. Unknown controls reject; leave uses local end semantics.
@@ -35,3 +35,10 @@ The full suite uses the copied GeckIt loader/formatter, pinned contract declarat
 No automated real clipboard click, phone/browser end-to-end flow, real model turn, or every MCode version is claimed. Final automated result: 47 tests passed; the final MCP snake_case authorization regression also passed after rebuilding.
 
 Sign-in release verification: 58 tests pass, including real tmux with a fake CLI, browser authorization handoff, single message delivery, cancellation and cleanup. No real-account logout was performed for testing.
+
+## Account credit balance (2026-11-05)
+
+- The quota reader now uses native `/usage`, whose account rows include Credits and subscription quota together; `/status` does not display credits. The parser supports the native aligned rows without colons and the older colon layout.
+- Credits are reported as `ProviderQuota.remaining`, independent of active subscription windows. Explicit zero, unknown balance and expired-trial windows remain distinct. No token capacity, spent percentage, original allowance or aggregate expiry is inferred from the balance.
+- [GeckIt PR #51](https://github.com/anetrebskii/geckit/pull/51) adds the optional remaining field and renderer support to GeckIt, plus explicit unavailable explanations. Library updates alone cannot update an older GeckIt renderer.
+- Read-only live verification against installed MCode 0.7.4 returned a credit balance without an active subscription. The private quota TUI was closed after verification; no model request was sent.

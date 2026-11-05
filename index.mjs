@@ -572,11 +572,15 @@ async function stopTask(rpc, id, task) {
   if (result.operation_error) throw new Error(result.operation_error.message || "MCode could not stop this task.");
   return result;
 }
-function quotaUsage(plan, measuredAt) {
+function quotaUsage(plan, measuredAt, unavailableReason, credits) {
   if (!plan) return void 0;
   return {
-    quotas: Object.entries(plan).map(([id, window]) => ({ id, name: id === "fiveHour" ? "5h" : id === "sevenDay" ? "Week" : id, ...window })),
-    ...Number.isFinite(measuredAt) ? { measuredAt } : {}
+    quotas: [
+      ...Object.entries(plan).map(([id, window]) => ({ id, name: id === "fiveHour" ? "5h" : id === "sevenDay" ? "Week" : id, ...window })),
+      ...Number.isFinite(credits) && credits >= 0 ? [{ id: "credits", name: "Credits", remaining: credits, unit: "credits" }] : []
+    ],
+    ...Number.isFinite(measuredAt) ? { measuredAt } : {},
+    ...unavailableReason ? { unavailableReason } : {}
   };
 }
 
@@ -1084,6 +1088,10 @@ function quotaDuration(text) {
 function parseQuota(text, now = Date.now()) {
   const plain = String(text ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").split("\n").map((line) => line.replace(/^\s*[│┃]\s?/, "").replace(/\s*[│┃]\s*$/, "")).join("\n");
   const windows = {};
+  const balance = /^[ \t]*Credits(?:[ \t]*:[ \t]*|[ \t]+)(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?[ \t]*$/im.exec(plain);
+  const amount = balance ? Number(balance[1].replaceAll(",", "") + (balance[2] ? `.${balance[2]}` : "")) : void 0;
+  const credits = Number.isFinite(amount) && amount >= 0 && amount <= Number.MAX_SAFE_INTEGER ? amount : void 0;
+  const unavailableReason = /^[ \t]*Quota(?:[ \t]*:[ \t]*|[ \t]+)No Token Plan subscription[ \t]*$/im.test(plain) ? "No active Token Plan subscription" : /^[ \t]*Quota(?:[ \t]*:[ \t]*|[ \t]+)Temporarily unavailable[ \t]*$/im.test(plain) ? "MiniMax is temporarily not reporting limits" : void 0;
   for (const match of plain.matchAll(/^\s*[│┃]?\s*(5-hour|Weekly)\b[^\n]*?(\d{1,3})\s*%\s*left\b[^\n]*?resets in\s+([0-9dhms]+(?:\s*[0-9dhms]+)*)/gim)) {
     const duration = quotaDuration(match[3]);
     const remaining = Number(match[2]);
@@ -1093,17 +1101,18 @@ function parseQuota(text, now = Date.now()) {
     if (match[1].toLowerCase() === "5-hour") windows.fiveHour = window;
     else windows.sevenDay = window;
   }
-  if (!windows.fiveHour && !windows.sevenDay) return void 0;
+  if (!windows.fiveHour && !windows.sevenDay && credits === void 0 && !unavailableReason) return void 0;
   const account = /^\s*[│┃]?\s*Account:\s*(.+?)\s*$/im.exec(plain)?.[1];
-  const label = account === void 0 ? void 0 : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
-  return { windows, ...label ? { label } : {} };
+  const tier = /^[ \t]*Plan(?:[ \t]*:[ \t]*|[ \t]+)([^\n]+?)[ \t]*$/im.exec(plain)?.[1]?.trim();
+  const label = tier && tier !== "Token Plan" ? tier : account === void 0 ? void 0 : /\(([^()]+)\)\s*$/.exec(account)?.[1]?.trim();
+  return { windows, ...label ? { label } : {}, ...credits === void 0 ? {} : { credits }, ...unavailableReason ? { unavailableReason } : {} };
 }
 function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram = findTmux, command = mcodeCommand, environment = mcodeEnvironment, log = () => {
-}, every = 10 * MINUTE } = {}) {
+}, every = 10 * MINUTE, execute = execFile4 } = {}) {
   const tmux = async (args) => {
     const { file, server } = await tmuxProgram();
     return new Promise((resolve3, reject) => {
-      execFile4(file, [...server, ...args], { env: environment(), timeout: 2e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve3(out));
+      execute(file, [...server, ...args], { env: environment(), timeout: 2e4, maxBuffer: 4 * 1024 * 1024 }, (error, out) => error ? reject(new Error(`tmux ${args[0]} failed.`)) : resolve3(out));
     });
   };
   const exists = () => tmux(["has-session", "-t", name]).then(() => true, () => false);
@@ -1133,7 +1142,7 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram
       if (terminalScreen(await capture()).kind === "idle") return;
       await delay3(100);
     }
-    throw new Error("MCode did not become ready for /status.");
+    throw new Error("MCode did not become ready for /usage.");
   };
   const read = async () => {
     if (disposed) return void 0;
@@ -1141,7 +1150,7 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram
     });
     if (!await exists()) await launch();
     await ready();
-    await tmux(["send-keys", "-t", name, "-l", "/status"]);
+    await tmux(["send-keys", "-t", name, "-l", "/usage"]);
     await delay3(500);
     await tmux(["send-keys", "-t", name, "Enter"]);
     let found;
@@ -1158,8 +1167,8 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram
     }
     lastRead = Date.now();
     if (found !== void 0) cached = { ...found, measuredAt: lastRead };
-    log("info", "quota.read", { outcome: found === void 0 ? "unreadable" : "completed", windows: found === void 0 ? 0 : Object.keys(found.windows).length });
-    return found;
+    log("info", "quota.read", { outcome: found === void 0 ? "unreadable" : "completed", windows: found === void 0 ? 0 : Object.keys(found.windows).length, creditsReported: found?.credits !== void 0 });
+    return found === void 0 ? void 0 : cached;
   };
   const refresh = () => {
     if (disposed) return Promise.resolve(void 0);
@@ -1182,6 +1191,12 @@ function quotaReader({ name = `geckit-mcode-quota-${randomUUID4()}`, tmuxProgram
     // The name of the plan, as MCode itself names it.
     label() {
       return cached?.label;
+    },
+    credits() {
+      return cached?.credits;
+    },
+    unavailableReason() {
+      return cached?.unavailableReason;
     },
     measuredAt() {
       return cached?.measuredAt;
@@ -1292,9 +1307,9 @@ function create(context = {}, dependencies = {}) {
     const found = await quota.refresh();
     if (!found?.windows) return;
     const said = JSON.stringify(reported);
-    reported = found.windows;
-    if (said === JSON.stringify(found.windows)) return;
-    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: "plan", plan: found.windows }, { kind: "usage", usage: quotaUsage(found.windows, found.measuredAt) }] });
+    reported = quotaUsage(found.windows, found.measuredAt, found.unavailableReason, found.credits);
+    if (said === JSON.stringify(reported)) return;
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: "plan", plan: found.windows }, { kind: "usage", usage: reported }] });
   };
   const provider = {
     id: ID,
@@ -1337,7 +1352,7 @@ function create(context = {}, dependencies = {}) {
         signedIn: true,
         program: program2,
         ...key === void 0 ? {} : { key },
-        ...plan === void 0 ? {} : { usage: quotaUsage(plan, quota.measuredAt?.()) },
+        ...plan === void 0 ? {} : { usage: quotaUsage(plan, quota.measuredAt?.(), quota.unavailableReason?.(), quota.credits?.()) },
         ...plan === void 0 || label === void 0 ? {} : { plan: label }
       };
     },
@@ -1362,7 +1377,7 @@ function create(context = {}, dependencies = {}) {
       const selected = known.find((model) => model.isDefault)?.value;
       if (await usesKey(rpc, selected ? { provider_id: selected.split("/")[0] } : void 0) === true) return { windows };
       const plan = await quota.windows();
-      return { windows, ...plan === void 0 ? {} : { plan, ...quotaUsage(plan) } };
+      return { windows, ...plan === void 0 ? {} : { plan, ...quotaUsage(plan, quota.measuredAt?.(), quota.unavailableReason?.(), quota.credits?.()) } };
     },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));

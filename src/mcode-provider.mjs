@@ -45,9 +45,9 @@ export function create(context = {}, dependencies = {}) {
     const found = await quota.refresh();
     if (!found?.windows) return;
     const said = JSON.stringify(reported);
-    reported = found.windows;
-    if (said === JSON.stringify(found.windows)) return;
-    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: 'plan', plan: found.windows }, { kind: 'usage', usage: quotaUsage(found.windows, found.measuredAt) }] });
+    reported = quotaUsage(found.windows, found.measuredAt, found.unavailableReason, found.credits);
+    if (said === JSON.stringify(reported)) return;
+    for (const driver of drivers) driver.report({ items: [], gone: [], signals: [{ kind: 'plan', plan: found.windows }, { kind: 'usage', usage: reported }] });
   };
   const provider = {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
@@ -68,7 +68,7 @@ export function create(context = {}, dependencies = {}) {
       const plan = await quota.windows();
       const label = quota.label();
       return { provider: ID, here: true, signedIn: true, program: program2,
-        ...(key === undefined ? {} : { key }), ...(plan === undefined ? {} : { usage: quotaUsage(plan, quota.measuredAt?.()) }),
+        ...(key === undefined ? {} : { key }), ...(plan === undefined ? {} : { usage: quotaUsage(plan, quota.measuredAt?.(), quota.unavailableReason?.(), quota.credits?.()) }),
         ...(plan === undefined || label === undefined ? {} : { plan: label }) };
     },
     models: async () => {
@@ -89,7 +89,7 @@ export function create(context = {}, dependencies = {}) {
       const selected = known.find(model => model.isDefault)?.value;
       if (await usesKey(rpc, selected ? { provider_id: selected.split('/')[0] } : undefined) === true) return { windows };
       const plan = await quota.windows();
-      return { windows, ...(plan === undefined ? {} : { plan, ...quotaUsage(plan) }) };
+      return { windows, ...(plan === undefined ? {} : { plan, ...quotaUsage(plan, quota.measuredAt?.(), quota.unavailableReason?.(), quota.credits?.()) }) };
     },
     list: async (roots) => (await sessions(rpc)).filter((session) => roots.some((root) => local(root) && inRoot(session.workspace_dir, root))).map((session) => {
       const row = providerRow(session), parent = roots.find((root) => inRoot(row.root, root));
