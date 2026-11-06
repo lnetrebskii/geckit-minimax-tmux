@@ -2,6 +2,12 @@
 
 Scope: MiniMax tmux provider ↔ GeckIt apiVersion 1. The pinned host contracts and all 63 related types are listed in [CONTRACT-COVERAGE.md](CONTRACT-COVERAGE.md).
 
+## Host goal-lifecycle follow-up
+
+The separate host checkout at pinned commit `69ad36623228400acc4b2fa94a4368fb91033d3f` now has an explicit optional `autoStartingGoals` capability. GeckIt holds a driver before native goal creation or resume and skips `Driver.send` for that kickoff. Prepared task text and completion condition travel together in the one native objective. Rename no longer depends on native goal support and still defers prepared copies. Builtin Codex/Claude and older apiVersion 1 libraries keep their existing paths.
+
+This adapter now advertises `nativeGoals` and `autoStartingGoals`. Its attached tmux driver observes MCode's POST/PATCH-initiated turn, permissions and transcript; GET restores goal status, and PATCH/DELETE control pause, resume and clear. The provider refuses bare `setGoal` because it would start a turn without an attached consumer. Isolated fake-MCode tests cover kickoff with a permission card and history, plus goal status and controls. This is working-tree integration; the installed GeckIt was not restarted or changed.
+
 ## Implemented
 
 - Published library updates use Git commits and hot replacement; an app restart is unnecessary. Running drivers are replaced when safe.
@@ -19,12 +25,10 @@ Scope: MiniMax tmux provider ↔ GeckIt apiVersion 1. The pinned host contracts 
 
 ## Remaining boundaries
 
-1. **Native goals require host integration.** `nativeGoals=false` remains deliberate. GeckIt handles a `/goal` request without necessarily holding a driver; MCode goal creation auto-starts work, potentially waiting on a native permission dialog with no event consumer. A message carrying a goal can also cause a second kickoff. Safe integration needs explicit goal-start/attach semantics, no duplicate turn, and pause/resume/clear lifecycle tests. Unsupported native goal mutations now reject rather than silently succeeding.
-2. **Native rename from the UI is host-gated.** The provider PATCH works, but the inspected host invokes it only when nativeGoals is true. That condition must be decoupled from goals.
-3. **No text-correction endpoint integration.** MCode exec is a full agent, not an isolated text-completion call; it must not be substituted without a verified tool-free configuration and cancellation lifecycle.
-4. Remote projects/control, Chrome browser selection and structured MCP elicitation are not advertised. Unknown native TUI dialogs require the terminal. Native approval labels are preserved as question cards; a broader session grant is never misrepresented as “once”.
-5. Native retry/hook/goal events, all blocked/terminal-auth/rate-limit layouts, assistant phase, cloud-only attachment recovery and helper progress remain unmapped. Optional pricing/cost/account identity are unknown, not zero.
-6. Session rows lack a trustworthy persisted program-origin marker and last-message summary; current driven/stands semantics remain limited. Write events describe native write/edit tools, not arbitrary shell filesystem changes. Send-to-background is not offered without native support.
+1. **No text-correction endpoint integration.** MCode exec is a full agent, not an isolated text-completion call; it must not be substituted without a verified tool-free configuration and cancellation lifecycle.
+2. Remote projects/control, Chrome browser selection and structured MCP elicitation are not advertised. Unknown native TUI dialogs require the terminal. Native approval labels are preserved as question cards; a broader session grant is never misrepresented as “once”.
+3. Native retry/hook events, all blocked/terminal-auth/rate-limit layouts, assistant phase, cloud-only attachment recovery and helper progress remain unmapped. Optional pricing/cost/account identity are unknown, not zero. Goal status is restored by GET, not streamed as a dedicated native event.
+4. Session rows lack a trustworthy persisted program-origin marker and last-message summary; current driven/stands semantics remain limited. Write events describe native write/edit tools, not arbitrary shell filesystem changes. Send-to-background is not offered without native support.
 
 These limitations are not claims of complete UI support. Enabling capability flags alone would not fix them.
 
@@ -35,6 +39,8 @@ The full suite uses the copied GeckIt loader/formatter, pinned contract declarat
 No automated real clipboard click, phone/browser end-to-end flow, real model turn, or every MCode version is claimed. Final automated result: 47 tests passed; the final MCP snake_case authorization regression also passed after rebuilding.
 
 Sign-in release verification: 58 tests pass, including real tmux with a fake CLI, browser authorization handoff, single message delivery, cancellation and cleanup. No real-account logout was performed for testing.
+
+The goal-lifecycle follow-up passes isolated adapter tests, including fake-MCode permission/history and pause/resume/clear; the host suite is reported with its own checkout.
 
 ## Account credit balance (2026-11-05)
 

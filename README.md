@@ -20,7 +20,7 @@ Each conversation opens `mcode --session <native-id> --tui-mode regular` in a un
 
 A plugin-owned `mcode app-server --stdio` process provides native session creation, model/account information, and saved history through the local DesktopService protocol. It does not send model prompts. Replies and tool records come from native saved messages, not reconstructed terminal text. The plugin does not extract or copy OAuth tokens and does not modify the CLI's instructions.
 
-Supported operations include history, search, rename, fork at a completed assistant response, delete, resume, permission cards, native questionnaires, and Stop. Forking uses MCode's native fork operation; it does not create a Git worktree. Session IDs are isolated under `plugin:minimax-tmux:`. Native history is shared with MCode: deleting a conversation in GeckIt also deletes that native MCode conversation.
+Supported operations include history, search, rename, fork at a completed assistant response, delete, resume, permission cards, native questionnaires, native goals, and Stop. Forking uses MCode's native fork operation; it does not create a Git worktree. Session IDs are isolated under `plugin:minimax-tmux:`. Native history is shared with MCode: deleting a conversation in GeckIt also deletes that native MCode conversation.
 
 A turn finishes only after observed activity, two idle terminal polls and MCode reporting no active session work. Stop sends Escape and waits for native work to settle. Closing a driver releases its tmux session; disposing the provider closes its drivers and its own control process. It does not kill other tmux sessions or MCode processes.
 
@@ -51,15 +51,15 @@ For the full behavioral audit, including missing integrations and the verificati
 | `resumeCommand` | Copy/open the native terminal continuation command: `mcode --session {id}` |
 | `hold` | The conversation in tmux, with permission and questionnaire cards, guidance while it works, Manual/Auto changes, and Stop |
 | `mcp` | The MCP servers MCode has, and switching them on and off |
-| `goal`, `setGoal`, `clearGoal` | Native goals not advertised; unsupported mutations reject explicitly |
+| `goal`, `startGoal`, `pauseGoal`, `resumeGoal`, `clearGoal` | Native goal lifecycle with a held tmux event consumer; bare `setGoal` rejects because it would start unobserved work |
 | `browsers`, `correct`, `remote` | Not offered by this adapter |
 | `setInstructions` | Scoped GeckIt guide for subsequent TUI launches; source-app overrides and Manager prompt preserved |
 
 ## Limits and troubleshooting
 
 - Local projects only; Windows and SSH projects are unsupported.
-- Background tasks/output/stop, local saved images, native write/edit paths, observed mode/model/effort and scoped instructions are mapped. Native goals still need a host lifecycle change; see the audit for remaining boundaries.
-- Native goal management, correction, and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
+- Background tasks/output/stop, local saved images, native write/edit paths, observed mode/model/effort, scoped instructions and native goals are mapped. Native goals require the separate GeckIt host change described in the audit; the installed host may not support them yet.
+- Correction and browser configuration from Geckit's settings are not advertised. MCP servers that MCode already has are listed and can be switched on and off. Tools and MCP already configured in MCode still work inside the native agent.
 - Publish the rebuilt bundle in a new commit on the source repository’s default branch. In GeckIt, check for library updates and apply the update; no app restart is required. Running conversations switch providers when safe. Copying local files alone does not make an update available: GeckIt compares Git commits.
 - Model pricing is unknown and omitted.
 - Account quotas and credits are read from MCode's `/usage` panel, so the first reading waits for MCode to start. A changed CLI layout may require an adapter update.

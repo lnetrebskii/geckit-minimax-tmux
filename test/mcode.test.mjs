@@ -74,6 +74,14 @@ test('recognizes native idle, work and explicit approval screens', () => {
   assert.equal(terminalScreen('╭─ Ask ─╮\nQuestion?\n› 1 Yes\n  2 No\n↑↓ move · 1-2 select · Enter send').options.length, 2);
   assert.equal(terminalScreen('╭─ Ask ─╮\nQuestion?\nType your answer · Enter send').input, true);
 });
+test('reads the error MCode shows when it refuses a submission', () => {
+  const footer = '  ───────────\n› ~/Desktop/scan.jpg\n  ───────────\nroot │ Auto │ Context 512K';
+  const refused = terminalScreen('› ~/Desktop/scan.jpg\n\n× Error · Usage limit reached. Code: 50110 Check /usage or switch provider, then resend the message. Your prompt is preserved.\nLong draft · Ctrl+G edit · Enter send\n' + footer);
+  assert.equal(refused.kind, 'idle');
+  assert.match(refused.error, /^Usage limit reached\. Code: 50110 .*preserved\.$/);
+  assert.equal(terminalScreen('Message · Enter send\n' + footer).error, undefined);
+  assert.equal(terminalScreen('× Error · old\nline\nline\nline\nline\nline\nline\nline\nMessage · Enter send\n' + footer).error, undefined);
+});
 
 test('reads the plan from the status panel MCode shows, and nothing else', () => {
   assert.equal(quotaDuration('2h 23m'), 2 * 3600000 + 23 * 60000);
@@ -299,6 +307,47 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.throws(() => driver.send('again'), /not ready/);
   } finally {
     await driver?.end(); await resumed?.end(); p.dispose();
+    try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('native goal kickoff is observed by the attached driver, including permission and history', { timeout: 45000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-goal-test-'));
+  const executable = join(directory, 'mcode');
+  const fixture = new URL('./fake-mcode.mjs', import.meta.url).pathname;
+  const q = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+  await writeFile(executable, `#!/bin/sh\nexec env MCODE_TEST_DIR=${q(directory)} ${q(process.execPath)} ${q(fixture)} "$@"\n`); await chmod(executable, 0o755);
+  const server = 'mcode-goal-' + Date.now();
+  const rpc = new McodeRpc({ command: () => executable, timeout: 5000 });
+  const provider = create({}, { rpc, program: async () => ({ version: '0.7.4' }), quota: { windows: async () => undefined, label: () => undefined, refresh: async () => undefined, dispose() {} }, terminal: { command: () => executable, tmuxProgram: async () => ({ file: 'tmux', server: ['-L', server] }) } });
+  let driver;
+  try {
+    const id = await provider.create({ root: directory });
+    const events = [];
+    driver = provider.hold({ id, root: directory, mode: 'auto' }, (event) => events.push(event), () => {});
+    const created = await provider.startGoal(id, 'permission', driver);
+    assert.equal(created.goal.condition, 'permission');
+    await until(() => events.some(event => event.signals.some(signal => signal.kind === 'asks')));
+    const ask = events.flatMap(event => event.signals).find(signal => signal.kind === 'asks');
+    assert.ok(events.flatMap(event => event.items).some(item => item.id === `card:${ask.ask}`));
+    assert.equal((await provider.read(directory, id)).items.filter(item => item.kind === 'mine').length, 1);
+    driver.answer(ask.ask, ask.wanted.choices[0]);
+    await until(() => events.some(event => event.signals.some(signal => signal.kind === 'ended' && signal.how === 'done')));
+    assert.equal((await provider.goal(directory, id)).status, 'complete');
+    await provider.startGoal(id, 'hold', driver);
+    await until(async () => (await provider.goal(directory, id)).status === 'active');
+    await provider.pauseGoal(id);
+    await until(() => events.flatMap(event => event.signals).filter(signal => signal.kind === 'ended').length === 2);
+    assert.equal((await provider.goal(directory, id)).status, 'paused');
+    await provider.resumeGoal(id, driver);
+    await until(async () => (await provider.goal(directory, id)).status === 'active');
+    await provider.clearGoal(id);
+    await until(() => events.flatMap(event => event.signals).filter(signal => signal.kind === 'ended').length === 3);
+    assert.equal(await provider.goal(directory, id), undefined);
+    for (const event of events) validateEvent(event);
+  } finally {
+    await driver?.end(); provider.dispose();
     try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
     await rm(directory, { recursive: true, force: true });
   }

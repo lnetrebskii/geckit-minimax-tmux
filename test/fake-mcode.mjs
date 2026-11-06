@@ -44,7 +44,30 @@ if (args.includes('app-server')) {
       result = { session_id: session.session_id, session };
     } else if (id && existsSync(path(id))) {
       const data = get(id);
-      if (url.pathname.endsWith('/message')) result = { messages: data.messages, has_more: false };
+      if (url.pathname.endsWith('/goal')) {
+        if (frame.method === 'POST') {
+          if (data.goal) status = 409;
+          else {
+            data.goal = { objective: body.objective, status: 'active', turns_used: 0 };
+            data.messages.push({ msg_id: randomUUID(), role: 'user', msg_content: body.objective, timestamp: Date.now() });
+            data.active = true; data.goalKickoff = body.objective; save(data);
+          }
+        } else if (frame.method === 'PATCH') {
+          if (!data.goal) status = 404;
+          else {
+            const was = data.goal.status;
+            data.goal = { ...data.goal, ...body };
+            if (body.status === 'active') {
+              data.active = true; data.goalKickoff = body.objective ?? data.goal.objective;
+              if (was !== 'active') data.messages.push({ msg_id: randomUUID(), role: 'user', msg_content: data.goalKickoff, timestamp: Date.now() });
+            }
+            if (body.status === 'paused') data.active = false;
+            save(data);
+          }
+        } else if (frame.method === 'DELETE') { delete data.goal; data.active = false; save(data); }
+        result = { goal: data.goal, ...(frame.method === 'DELETE' ? { success: true } : {}) };
+      }
+      else if (url.pathname.endsWith('/message')) result = { messages: data.messages, has_more: false };
       else if (url.pathname.endsWith('/background-tasks')) result = { items: data.tasks ?? [] };
       else if (url.pathname.includes('/background-tasks/')) {
         const task = data.tasks?.find(task => task.task_id === url.pathname.split('/')[7]);
@@ -63,7 +86,7 @@ const at = args.indexOf('--session');
 const id = at < 0 ? undefined : args[at + 1];
 if (id) { const data = get(id); data.startupArgs = args; save(data); }
 let attachments = [], pasteStart = 0;
-let input = '', pasting = false, busy = false, permission = false, timer;
+let input = '', pasting = false, busy = false, goalMode = false, permission = false, timer;
 const paint = (body) => process.stdout.write('\x1b[2J\x1b[H' + body);
 const prompt = '    ───────────────────────────────────\n  › Ask Mcode to do anything\n    ───────────────────────────────────\n  project │ Auto │ ✦ Test │ Context 512K\n';
 const imageLabels = () => prompt.replace('Ask Mcode to do anything', attachments.length ? attachments.map((_, i) => `[Image #${i + 1}]`).join(' ') : 'Ask Mcode to do anything');
@@ -104,7 +127,11 @@ const message = (role, text) => {
   save(data);
 };
 const active = (value) => { if (id) { const data = get(id); data.active = value; save(data); } busy = value; };
-const reply = (text) => { message('assistant', text); active(false); idle(); };
+const reply = (text) => {
+  message('assistant', text);
+  if (id) { const data = get(id); if (data.goal?.status === 'active') { data.goal.status = 'complete'; data.goal.turns_used += 1; save(data); } }
+  goalMode = false; active(false); idle();
+};
 const submit = (text) => {
   if (text.startsWith('/permission ') || text.startsWith('/plan ')) {
     if (id) { const data = get(id); (data.commands ??= []).push(text); save(data); }
@@ -121,6 +148,17 @@ const submit = (text) => {
   timer = setTimeout(() => reply('answer: ' + text), 250);
 };
 process.stdin.setRawMode(true); process.stdin.resume(); process.stdout.write('\x1b[?2004h'); idle();
+if (id) setInterval(() => {
+  const data = get(id);
+  if (goalMode && (!data.goal || data.goal.status === 'paused')) { goalMode = false; busy = false; idle(); }
+  if (!data.goalKickoff) return;
+  const text = data.goalKickoff;
+  delete data.goalKickoff; save(data);
+  goalMode = true; busy = true; working();
+  if (text === 'hold') return;
+  if (text.includes('permission')) { permission = true; paint('╭─ ◆ Approval required ─╮\nRun this command?\n  › 1 Allow for this conversation\n    2 Always allow matching actions\n    3 Deny and guide MCode\nEnter select · Esc cancel\n'); }
+  else timer = setTimeout(() => reply('answer: ' + text), 250);
+}, 100);
 process.stdin.on('data', (bytes) => {
   let data = bytes.toString();
   while (data.length) {

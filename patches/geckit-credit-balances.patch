@@ -1,0 +1,220 @@
+diff --git a/client/src/main/sessions/provider-usage.ts b/client/src/main/sessions/provider-usage.ts
+index 12d8b7a..e142329 100644
+--- a/client/src/main/sessions/provider-usage.ts
++++ b/client/src/main/sessions/provider-usage.ts
+@@ -78,7 +78,7 @@ export class ProviderMeasurements {
+       if (this.#all.get(provider.family) !== entry) return
+       for (const model of missing) if (!entry.windows.has(model) || limits.windows.get(model) !== undefined) entry.windows.set(model, limits.windows.get(model))
+       const quotas = providerQuotas(limits)
+-      if (entry.revision === revision) entry.usage = { ...(quotas === undefined ? {} : { quotas }), measuredAt: this.#now() }
++      if (entry.revision === revision) entry.usage = { ...(quotas === undefined ? {} : { quotas }), ...(limits.unavailableReason === undefined ? {} : { unavailableReason: limits.unavailableReason }), measuredAt: this.#now() }
+       this.#changed(provider.family, entry.revision === revision ? limits : { windows: limits.windows })
+     }).catch(() => undefined).finally(() => { entry.pending = undefined })
+     await entry.pending
+diff --git a/client/src/main/sessions/provider.ts b/client/src/main/sessions/provider.ts
+index 3e136a8..728bb2c 100644
+--- a/client/src/main/sessions/provider.ts
++++ b/client/src/main/sessions/provider.ts
+@@ -32,7 +32,7 @@ type ProviderDeps = Pick<SessionsDeps, 'codex' | 'disk' | 'claude' | 'claudeAcco
+ export type ProviderRow = Found & { readonly root: string; readonly project?: string; readonly created?: number; readonly importedFrom?: string; readonly actualReasoning?: ReasoningEffort }
+ export type ProviderGoal = GoalRead & { readonly status?: CodexGoal['status'] }
+ export type ProviderFork = Pick<ClaudeOptions, 'id' | 'fork'> & { readonly begun: boolean; readonly items: readonly SessionItem[] }
+-export type ProviderLimits = Usage & Pick<ClaudeAccount, 'limits'> & Pick<ProviderUsage, 'quotas'>
++export type ProviderLimits = Usage & Pick<ClaudeAccount, 'limits'> & Pick<ProviderUsage, 'quotas' | 'unavailableReason'>
+ export type ProviderBrowser = Pick<Browser, 'id' | 'name'> & Partial<Pick<Browser, 'current'>>
+ 
+ export interface LlmProvider extends LlmProviderInfo {
+diff --git a/client/src/renderer/src/assistant-status-preview.tsx b/client/src/renderer/src/assistant-status-preview.tsx
+index 2404cf9..59ea5a6 100644
+--- a/client/src/renderer/src/assistant-status-preview.tsx
++++ b/client/src/renderer/src/assistant-status-preview.tsx
+@@ -17,7 +17,7 @@ const libraries: readonly LlmProviderInfo[] = [
+ ]
+ registerProviderInfo(libraries)
+ const providers: readonly SessionProvider[] = ['claude', 'codex', 'plugin:claude-tmux', 'plugin:kimi']
+-const scenarios = ['ready', 'checking', 'unavailable', 'signed-out', 'no-quotas', 'single-quotas', 'many-quotas', 'multi-hosts', 'local-plan'] as const
++const scenarios = ['ready', 'checking', 'unavailable', 'signed-out', 'no-quotas', 'single-quotas', 'many-quotas', 'multi-hosts', 'local-plan', 'credits', 'empty-credits'] as const
+ type Scenario = typeof scenarios[number]
+ let scenario: Scenario = scenarios.find((one) => one === query.get('state')) ?? 'ready'
+ const measuredAt = Date.now()
+@@ -25,6 +25,7 @@ const quotas: readonly ProviderQuota[] = [{ id: 'five-hour', name: '5h', part: 0
+ const listeners = new Set<(account: ClaudeAccount) => void>()
+ function fixture(provider: SessionProvider, state: Scenario): ClaudeAccount | undefined {
+   if (state === 'unavailable') return undefined
++  if (state === 'credits' || state === 'empty-credits') return { provider, here: true, signedIn: true, usage: { quotas: [{ id: 'credits', name: 'Credits', remaining: state === 'credits' ? 1250 : 0, unit: 'credits' }], measuredAt } }
+   const providerQuotas: readonly ProviderQuota[] = state === 'no-quotas' ? [] : state === 'many-quotas' ? Array.from({ length: 20 }, (_, index) => ({ id: String(index), name: `Model ${String(index + 1)} monthly token allowance`, used: index * 10000, limit: 200000, unit: 'tokens', resetsAt: measuredAt + 86_400_000 })) : provider === 'codex' ? quotas.map((one) => ({ ...one, part: one.id === 'five-hour' ? 0.78 : 0.91 })) : provider === 'plugin:kimi' ? [{ id: 'requests', name: 'Day', used: 34, limit: 100, unit: 'requests' }] : quotas
+   const shownQuotas = state === 'single-quotas' ? providerQuotas.filter((_quota, index) => index === (provider === 'codex' ? 1 : 0)) : providerQuotas
+   return { provider, here: true, signedIn: state !== 'signed-out', plan: provider === 'codex' ? 'Plus' : provider === 'plugin:kimi' ? 'Standard' : provider === 'plugin:claude-tmux' ? 'Max' : 'Team', program: { version: provider === 'codex' ? '0.114.0' : '2.1.294', from: 'the native installer' }, usage: { quotas: shownQuotas, measuredAt } }
+diff --git a/client/src/renderer/src/chat/AssistantStatus.tsx b/client/src/renderer/src/chat/AssistantStatus.tsx
+index dc36f74..b53eb31 100644
+--- a/client/src/renderer/src/chat/AssistantStatus.tsx
++++ b/client/src/renderer/src/chat/AssistantStatus.tsx
+@@ -58,7 +58,7 @@ function stateLine(group: Group): string | undefined {
+   if (group.account?.here === false) return 'Not installed'
+   if (group.account?.signedIn === false) return 'Sign in required'
+   if (group.stale) return 'Last measured'
+-  return group.usage?.quotas?.length ? undefined : 'Limits unavailable'
++  return group.usage?.quotas?.length ? undefined : group.usage?.unavailableReason ?? 'Limits unavailable'
+ }
+ 
+ function groupsOf(provider: SessionProvider, snapshot: Snapshot | undefined, chat: AssistantStatusChat): Group[] {
+diff --git a/client/src/renderer/src/chat/ProviderUsage.tsx b/client/src/renderer/src/chat/ProviderUsage.tsx
+index e8b8830..e81c415 100644
+--- a/client/src/renderer/src/chat/ProviderUsage.tsx
++++ b/client/src/renderer/src/chat/ProviderUsage.tsx
+@@ -3,21 +3,24 @@ import { quotaPart } from '../../../shared/provider-usage'
+ import { Cell } from './PhoneKit'
+ import { Meter, until } from './UsageMeter'
+ 
++const quotaNumbers = new Intl.NumberFormat()
++
+ export function quotaValue(quota: ProviderQuota): string {
+   const part = quotaPart(quota)
++  if (quota.remaining !== undefined) return `${quotaNumbers.format(quota.remaining)}${quota.unit === undefined ? '' : ` ${quota.unit}`} left`
+   if (quota.used !== undefined) return `${quota.used.toLocaleString()}${quota.limit === undefined ? '' : ` of ${quota.limit.toLocaleString()}`}${quota.unit === undefined ? '' : ` ${quota.unit}`}`
+   return part === undefined ? 'Not reported' : `${String(Math.round(part * 100))}%`
+ }
+ 
+ export function QuotaRows({ usage, now }: { readonly usage: ProviderUsage | undefined; readonly now: number }): React.JSX.Element {
+-  return <div className="phone-group provider-quotas">{usage?.quotas === undefined || usage.quotas.length === 0 ? <Cell label="Limits" value="Unavailable" /> : usage.quotas.map((quota) => {
++  return <div className="phone-group provider-quotas">{usage?.quotas === undefined || usage.quotas.length === 0 ? <Cell label="Limits" value={usage?.unavailableReason ?? 'Unavailable'} /> : usage.quotas.map((quota) => {
+     const part = quotaPart(quota)
+     return <Cell key={quota.id} label={quota.name} says={quota.resetsAt === undefined ? undefined : `Resets in ${until(quota.resetsAt, now)}`} value={<span className={`phone-meter${quota.used === undefined ? '' : ' quota-count'}`}>{part === undefined ? null : <Meter part={part} />}<span>{quotaValue(quota)}</span></span>} />
+   })}</div>
+ }
+ 
+ export function QuotaStats({ usage, now }: { readonly usage: ProviderUsage | undefined; readonly now: number }): React.JSX.Element | null {
+-  if (usage?.quotas === undefined || usage.quotas.length === 0) return null
++  if (usage?.quotas === undefined || usage.quotas.length === 0) return usage?.unavailableReason === undefined ? null : <span className="stat">{usage.unavailableReason}</span>
+   return <>{usage.quotas.map((quota) => {
+     const part = quotaPart(quota)
+     const reset = quota.resetsAt === undefined ? '' : `, resets in ${until(quota.resetsAt, now)}`
+diff --git a/client/src/shared/api.ts b/client/src/shared/api.ts
+index fdea171..cf9ef73 100644
+--- a/client/src/shared/api.ts
++++ b/client/src/shared/api.ts
+@@ -251,6 +251,8 @@ export interface ProviderQuota extends Partial<PlanWindow> {
+   readonly id: string
+   readonly name: string
+   readonly used?: number
++  /** Available balance, independently of how much has been consumed. */
++  readonly remaining?: number
+   readonly limit?: number
+   readonly unit?: string
+ }
+@@ -258,6 +260,8 @@ export interface ProviderQuota extends Partial<PlanWindow> {
+ export interface ProviderUsage {
+   readonly quotas?: readonly ProviderQuota[]
+   readonly measuredAt?: number
++  /** Provider-reported explanation when quota figures are unavailable. */
++  readonly unavailableReason?: string
+ }
+ 
+ /** Prices in the named currency per million tokens. Omitted rates are unknown. */
+diff --git a/client/test/provider-usage-ui.test.tsx b/client/test/provider-usage-ui.test.tsx
+new file mode 100644
+index 0000000..4c35c1d
+--- /dev/null
++++ b/client/test/provider-usage-ui.test.tsx
+@@ -0,0 +1,36 @@
++import * as React from 'react'
++import { renderToStaticMarkup } from 'react-dom/server'
++import { afterAll, expect, it, vi } from 'vitest'
++import { QuotaRows, QuotaStats } from '../src/renderer/src/chat/ProviderUsage'
++import { quotaPart } from '../src/shared/provider-usage'
++
++vi.hoisted(() => { vi.stubGlobal('window', {}) })
++vi.stubGlobal('React', React)
++afterAll(() => { vi.unstubAllGlobals() })
++
++it('shows the provider explanation without a fabricated quota meter', () => {
++  const usage = { quotas: [], unavailableReason: 'No active Token Plan subscription' }
++  const rows = renderToStaticMarkup(<QuotaRows usage={usage} now={0} />)
++  const stats = renderToStaticMarkup(<QuotaStats usage={usage} now={0} />)
++  expect(rows).toContain(usage.unavailableReason)
++  expect(stats).toContain(usage.unavailableReason)
++  expect(rows).not.toContain('0%')
++  expect(stats).not.toContain('0%')
++  expect(renderToStaticMarkup(<QuotaRows usage={undefined} now={0} />)).toContain('Unavailable')
++})
++
++it('renders credit balances as remaining amounts, including zero, without a usage meter', () => {
++  for (const remaining of [1250, 0]) {
++    const quota = { id: 'credits', name: 'Credits', remaining, unit: 'credits' }
++    const usage = { quotas: [quota], unavailableReason: 'No active Token Plan subscription' }
++    const text = `${remaining.toLocaleString()} credits left`
++    const rows = renderToStaticMarkup(<QuotaRows usage={usage} now={0} />)
++    const stats = renderToStaticMarkup(<QuotaStats usage={usage} now={0} />)
++    expect(rows).toContain(text)
++    expect(stats).toContain(text)
++    expect(rows).not.toContain(usage.unavailableReason)
++    expect(rows).not.toContain('0%')
++    expect(stats).not.toContain('0%')
++    expect(quotaPart(quota)).toBeUndefined()
++  }
++})
+diff --git a/client/test/provider-usage.test.ts b/client/test/provider-usage.test.ts
+index a775511..bf34767 100644
+--- a/client/test/provider-usage.test.ts
++++ b/client/test/provider-usage.test.ts
+@@ -34,6 +34,25 @@ it('keeps resolved model metadata, zero prices and unknown rates distinct', () =
+ })
+ 
+ describe('provider-scoped measurements', () => {
++  it('replaces old quota figures with a provider explanation and clears it after recovery', async () => {
++    let now = 1000
++    const cache = new ProviderMeasurements(() => now, () => {})
++    const reason = 'No active Token Plan subscription'
++    const limits = vi.fn<LlmProvider['limits']>()
++      .mockResolvedValueOnce({ windows: new Map(), quotas: [{ id: 'credits', name: 'Credits', remaining: 1250, unit: 'credits' }] })
++      .mockResolvedValueOnce({ windows: new Map(), quotas: [], unavailableReason: reason })
++      .mockResolvedValueOnce({ windows: new Map(), quotas: [{ id: 'credits', name: 'Credits', remaining: 0, unit: 'credits' }] })
++    const provider = plugin({ limits })
++    await cache.measure(provider, [])
++    expect(cache.usage(provider.family).quotas).toEqual([{ id: 'credits', name: 'Credits', remaining: 1250, unit: 'credits' }])
++    now += 60_001
++    await cache.measure(provider, [])
++    expect(cache.usage(provider.family)).toEqual({ quotas: [], unavailableReason: reason, measuredAt: now })
++    now += 60_001
++    await cache.measure(provider, [])
++    expect(cache.usage(provider.family)).toEqual({ quotas: [{ id: 'credits', name: 'Credits', remaining: 0, unit: 'credits' }], measuredAt: now })
++  })
++
+   it('isolates equal model IDs and coalesces requests within a minute', async () => {
+     let now = 1000
+     const cache = new ProviderMeasurements(() => now, () => {})
+diff --git a/client/tsconfig.node.json b/client/tsconfig.node.json
+index 7728597..84cf886 100644
+--- a/client/tsconfig.node.json
++++ b/client/tsconfig.node.json
+@@ -6,5 +6,5 @@
+     "composite": true
+   },
+   "include": ["src/main", "src/core", "src/service", "service.vite.config.ts", "src/cli","src/preload", "src/shared", "test", "electron.vite.config.ts", "eslint.config.js"],
+-  "exclude": ["test/browser/shortcut-employees", "test/browser/employees", "test/employee-memory-ui.test.ts", "test/browser/new-task-drop", "test/browser/manager-sources", "test/browser/conversation-export", "test/browser/headless-service", "test/browser/board-performance", "test/accounts.test.ts", "test/peer.test.ts", "test/phone.test.ts", "test/plans.test.ts", "test/started.test.ts", "test/transcript.test.ts", "test/switcher.test.ts", "test/manager-ui.test.ts", "test/board-groups.test.ts", "test/gecko-panel.test.ts"]
++  "exclude": ["test/provider-usage-ui.test.tsx", "test/browser/shortcut-employees", "test/browser/employees", "test/employee-memory-ui.test.ts", "test/browser/new-task-drop", "test/browser/manager-sources", "test/browser/conversation-export", "test/browser/headless-service", "test/browser/board-performance", "test/accounts.test.ts", "test/peer.test.ts", "test/phone.test.ts", "test/plans.test.ts", "test/started.test.ts", "test/transcript.test.ts", "test/switcher.test.ts", "test/manager-ui.test.ts", "test/board-groups.test.ts", "test/gecko-panel.test.ts"]
+ }
+diff --git a/client/tsconfig.web.json b/client/tsconfig.web.json
+index 8ba3c3b..fb33df5 100644
+--- a/client/tsconfig.web.json
++++ b/client/tsconfig.web.json
+@@ -7,5 +7,5 @@
+     "noEmit": true,
+     "composite": true
+   },
+-  "include": ["test/employee-memory-ui.test.ts", "src/renderer/src", "src/shared", "src/preload", "test/accounts.test.ts", "test/peer.test.ts", "test/phone.test.ts", "test/plans.test.ts", "test/started.test.ts", "test/transcript.test.ts", "test/switcher.test.ts", "test/manager-ui.test.ts", "test/board-groups.test.ts", "test/gecko-panel.test.ts"]
++  "include": ["test/provider-usage-ui.test.tsx", "test/employee-memory-ui.test.ts", "src/renderer/src", "src/shared", "src/preload", "test/accounts.test.ts", "test/peer.test.ts", "test/phone.test.ts", "test/plans.test.ts", "test/started.test.ts", "test/transcript.test.ts", "test/switcher.test.ts", "test/manager-ui.test.ts", "test/board-groups.test.ts", "test/gecko-panel.test.ts"]
+ }
+diff --git a/docs/provider-plugins.md b/docs/provider-plugins.md
+index 961933d..355515f 100644
+--- a/docs/provider-plugins.md
++++ b/docs/provider-plugins.md
+@@ -177,6 +177,8 @@ Return `plugin:<slug>:<native-id>` from `create`, `list` and `fork`. Translate i
+ 
+ `part` is a fraction, 0..1. Alternatively provide `used`/`limit`/`unit`. `resetsAt` and `measuredAt` are Unix **milliseconds**. IDs must be stable and unique per quota. `account().usage` may return the same quotas plus `measuredAt` for account-based integrations.
+ 
++For a remaining balance, use `remaining` and `unit`, for example `{ id: 'credits', name: 'Credits', remaining: 1200, unit: 'credits' }`. GeckIt displays `1,200 credits left`. Do not put a balance in `used`, or infer a percentage without a known allowance. If no quota figures are available, `unavailableReason` in `limits()` or `account().usage` can explain why; it is displayed only when there are no quota rows.
++
+ API v1 legacy `plan` (Claude five-hour/seven-day windows) and `limits` (Codex primary/secondary windows) still normalize automatically. Codex legacy reset timestamps are seconds; the generic fields above are milliseconds. Provider/model measurements are isolated, concurrent requests coalesce, and the backend caches for one minute. Visible windows refresh every five minutes and on focus. Failed polling retains the previous successful measurement.
+ 
+ Context capacity comes from model metadata, measured `windows`, persisted conversation data, or a live `spend.window`. Live conversation capacity takes precedence. Unknown remains omitted, not zero.

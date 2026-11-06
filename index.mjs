@@ -628,9 +628,12 @@ function terminalScreen(text) {
   const working = /Esc (?:interrupt|to interrupt|stop)|esc (?:interrupt|to interrupt|stop)|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/.test(status);
   const footer = prompt < 0 ? "" : lines.slice(prompt + 2).join("\n");
   const mode = /[│|]\s*(Auto|Ask|Manual|Full|Plan)\s*[│|]/.exec(footer)?.[1];
+  const errorAt = prompt < 2 ? -1 : lines.findLastIndex((line, index) => index < prompt - 1 && /^\s*×\s+Error\s+·\s/.test(line));
+  const error = errorAt === -1 || prompt - errorAt > 8 ? void 0 : lines.slice(errorAt, prompt - 2).join(" ").replace(/^\s*×\s+Error\s+·\s+/, "").replace(/\s+/g, " ").trim();
   return {
     kind: working ? "working" : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? "idle" : "unknown",
     text: body,
+    ...!working && error ? { error } : {},
     ...mode ? { mode: { Auto: "auto", Ask: "manual", Manual: "manual", Full: "bypassPermissions", Plan: "plan" }[mode] } : {}
   };
 }
@@ -796,7 +799,16 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       }
       activity = true;
     }
-    if (turn && (activity || stopping) && shown.kind === "idle") {
+    if (turn && !stopping && shown.kind === "idle" && shown.error) {
+      const native = await rpc.request(`${API}/session/${options.id}/activity`);
+      if (native.state === 0) idle++;
+      else idle = 0;
+      if (idle >= 2) {
+        await tmux(["send-keys", "-t", name, "C-c"]).catch(() => {
+        });
+        finish(/usage limit|rate limit/i.test(shown.error) ? "limit" : "failed", shown.error);
+      }
+    } else if (turn && (activity || stopping) && shown.kind === "idle") {
       const native = await rpc.request(`${API}/session/${options.id}/activity`);
       if (native.state === 0) idle++;
       else idle = 0;
@@ -936,6 +948,56 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       if (!attached) throw new Error("MCode did not accept the image attachment.");
     }
   };
+  const prepare = async () => {
+    await requireLogin();
+    const fresh = started === void 0;
+    started ??= start();
+    await started;
+    await applying;
+    await ready();
+    if (fresh && options.mode) {
+      const mode = { manual: "ask", auto: "auto", plan: "ask", bypassPermissions: "full" }[options.mode];
+      if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
+      await paste(`/permission ${mode}`, async () => {
+        if (closed || stopping) throw new Error("MCode stopped.");
+      });
+      await delay2(350);
+      await ready();
+      await paste(`/plan ${options.mode === "plan" ? "on" : "off"}`, async () => {
+        if (closed || stopping) throw new Error("MCode stopped.");
+      });
+      await delay2(350);
+      await ready();
+    }
+    while (wanted && !closed) {
+      await ready();
+      await applyPermission(true);
+    }
+    baseline = new Set((await refresh()).map((message) => message.msg_id));
+  };
+  const goalTurn = async (method, body) => {
+    if (closed || submitting || turn) throw new Error("MCode is not ready for a goal turn.");
+    submitting = true;
+    try {
+      await prepare();
+      if (closed || stopping) throw new Error("MCode stopped before goal delivery.");
+      turn = true;
+      stopping = false;
+      activity = false;
+      idle = 0;
+      emit([], [], [{ kind: "begun" }]);
+      submitting = false;
+      const result = await rpc.request(`${API}/session/${options.id}/goal`, method, body);
+      log("info", "goal.started", { session: options.id, operation: method });
+      return result;
+    } catch (error) {
+      finish(error.status === 401 ? "signedOut" : error.status === 429 ? "limit" : "failed", error.message);
+      await close();
+      throw error;
+    } finally {
+      submitting = false;
+    }
+  };
   const driver = {
     send(text, images = [], before = []) {
       if (closed || submitting || turn) throw new Error("MCode is not ready for a new turn.");
@@ -947,31 +1009,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       idle = 0;
       emit([], [], [{ kind: "begun" }]);
       void (async () => {
-        await requireLogin();
-        const fresh = started === void 0;
-        started ??= start();
-        await started;
-        await applying;
-        await ready();
-        if (fresh && options.mode) {
-          const mode = { manual: "ask", auto: "auto", plan: "ask", bypassPermissions: "full" }[options.mode];
-          if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
-          await paste(`/permission ${mode}`, async () => {
-            if (closed || stopping) throw new Error("MCode stopped.");
-          });
-          await delay2(350);
-          await ready();
-          await paste(`/plan ${options.mode === "plan" ? "on" : "off"}`, async () => {
-            if (closed || stopping) throw new Error("MCode stopped.");
-          });
-          await delay2(350);
-          await ready();
-        }
-        while (wanted && !closed) {
-          await ready();
-          await applyPermission(true);
-        }
-        baseline = new Set((await refresh()).map((message) => message.msg_id));
+        await prepare();
         const guard = async () => {
           if (closed || stopping) throw new Error("MCode delivery stopped.");
         };
@@ -985,6 +1023,13 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
         submitting = false;
       });
     },
+    startGoal: (objective, existing = false) => goalTurn(existing ? "PATCH" : "POST", existing ? { objective, status: "active" } : { objective }),
+    observeGoal: async () => {
+      if (closed) throw new Error("MCode is closed.");
+      started ??= start();
+      await started;
+    },
+    resumeGoal: () => goalTurn("PATCH", { status: "active" }),
     async inject(text, images = [], before = []) {
       if (closed || !turn || stopping || submitting || pending || login.active) throw new Error("MCode cannot accept guidance now; the message remains queued.");
       const prompt = input(text, images, before);
@@ -1258,6 +1303,15 @@ Use this GeckIt CLI for all GeckIt commands: ${JSON.stringify(command)}.
 var local = (root) => typeof root === "string" && !root.startsWith("ssh://");
 var inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, "") + "/");
 var positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+var goalStatus = { active: "active", paused: "paused", complete: "complete", blocked: "blocked", budget_limited: "budgetLimited", usage_limited: "usageLimited" };
+var shownGoal = (native) => native && typeof native.objective === "string" ? {
+  ...native.status === "complete" ? {} : { goal: {
+    condition: native.objective,
+    checks: Number.isSafeInteger(native.turns_used) ? native.turns_used : 0,
+    ...typeof native.status_reason === "string" ? { reason: native.status_reason } : {}
+  } },
+  ...goalStatus[native.status] ? { status: goalStatus[native.status] } : {}
+} : void 0;
 var modelSelection = (value) => {
   const at = value.indexOf("/");
   if (at <= 0 || at === value.length - 1) throw new Error("Select a provider/model from MCode\u2019s model list.");
@@ -1300,7 +1354,13 @@ function create(context = {}, dependencies = {}) {
       throw error;
     }
     const saved = await messages(rpc, nativeId(id));
-    return { items: (await Promise.all(saved.map((message) => messageItemsWithImages(message, root)))).flat(), tasks: await backgroundTasks(rpc, nativeId(id)), ...contextSpend(saved) };
+    const native = await rpc.request(`${API}/session/${nativeId(id)}/goal`);
+    return {
+      items: (await Promise.all(saved.map((message) => messageItemsWithImages(message, root)))).flat(),
+      tasks: await backgroundTasks(rpc, nativeId(id)),
+      ...contextSpend(saved),
+      ...shownGoal(native.goal)?.goal ? { goal: shownGoal(native.goal).goal } : {}
+    };
   };
   const reportPlan = async () => {
     if (await usesKey(rpc, await selectedModel(rpc)) === true) return;
@@ -1326,7 +1386,8 @@ function create(context = {}, dependencies = {}) {
     subscriptionOnly: false,
     images: true,
     remoteControl: false,
-    nativeGoals: false,
+    nativeGoals: true,
+    autoStartingGoals: true,
     idleMs: 36e5,
     waitForExit: true,
     instructions: "own",
@@ -1425,12 +1486,38 @@ function create(context = {}, dependencies = {}) {
     },
     read,
     links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
-    goal: async () => void 0,
-    setGoal: async () => {
-      throw new Error("Native MCode goals need a GeckIt goal-driver lifecycle; this provider does not advertise nativeGoals.");
+    goal: async (root, id) => {
+      await info(root, id);
+      return shownGoal((await rpc.request(`${API}/session/${nativeId(id)}/goal`)).goal);
     },
-    clearGoal: async () => {
-      throw new Error("Native MCode goals are not managed by this provider.");
+    setGoal: async () => {
+      throw new Error("MCode goals start a turn; hold a driver and call startGoal.");
+    },
+    startGoal: async (id, objective, driver, message) => {
+      if (typeof driver?.startGoal !== "function") throw new Error("MCode goal driver is unavailable.");
+      const native = nativeId(id);
+      const current = (await rpc.request(`${API}/session/${native}/goal`)).goal;
+      const task = message?.trim();
+      const effective = task && task !== objective ? `Task: ${task}
+
+Completion condition: ${objective}` : objective;
+      if (current?.status === "active") {
+        if (typeof driver.observeGoal !== "function") throw new Error("MCode goal observer is unavailable.");
+        await driver.observeGoal();
+        if (current.objective === effective) return shownGoal(current);
+        return shownGoal((await rpc.request(`${API}/session/${native}/goal`, "PATCH", { objective: effective })).goal);
+      }
+      return shownGoal((await driver.startGoal(effective, current !== void 0)).goal);
+    },
+    clearGoal: async (id) => {
+      await rpc.request(`${API}/session/${nativeId(id)}/goal`, "DELETE");
+    },
+    pauseGoal: async (id) => {
+      await rpc.request(`${API}/session/${nativeId(id)}/goal`, "PATCH", { status: "paused" });
+    },
+    resumeGoal: async (_id, driver) => {
+      if (typeof driver?.resumeGoal !== "function") throw new Error("MCode goal driver is unavailable.");
+      await driver.resumeGoal();
     },
     rename: async (id, title) => {
       await rpc.request(`${API}/session/${nativeId(id)}`, "PATCH", { title });

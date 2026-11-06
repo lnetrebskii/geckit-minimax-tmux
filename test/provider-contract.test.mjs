@@ -17,6 +17,7 @@ function fixture() {
     { msg_id: 'c', role: 'assistant', msg_content: 'later', timestamp: 15, actions: { fork: true } },
   ]]]);
   const calls = [];
+  const goals = new Map();
   let disposed = 0;
   const rpc = {
     account: async () => ({ state: 'authenticated' }),
@@ -35,6 +36,11 @@ function fixture() {
       const id = url.pathname.split('/')[5];
       const session = rows.get(id);
       if (!session) { const error = new Error('Not found'); error.status = 404; throw error; }
+      if (url.pathname.endsWith('/goal')) {
+        if (method === 'DELETE') goals.delete(id);
+        if (method === 'PATCH') goals.set(id, { ...goals.get(id), ...body });
+        return { goal: goals.get(id) };
+      }
       if (url.pathname.endsWith('/message')) return { messages: history.get(id) ?? [], has_more: false };
       if (url.pathname.endsWith('/fork')) {
         const copied = { ...session, session_id: 'mvs_fork' };
@@ -49,7 +55,7 @@ function fixture() {
   };
   const quota = { windows: async () => undefined, label: () => undefined, refresh: async () => undefined, dispose() {} };
   const provider = create({}, { rpc, quota, program: async () => ({ version: '0.7.4' }) });
-  return { provider, rpc, calls, rows, history, disposed: () => disposed };
+  return { provider, rpc, calls, rows, history, goals, disposed: () => disposed };
 }
 
 test('every required provider member and advertised capability matches the pinned host contract', async () => {
@@ -139,19 +145,56 @@ test('unsupported contracts return honest empty/error results and startup remain
   const f = fixture();
   try {
     assert.deepEqual(f.calls, []);
-    assert.equal(f.provider.nativeGoals, false);
+    assert.equal(f.provider.nativeGoals, true);
+    assert.equal(f.provider.autoStartingGoals, true);
     assert.equal(f.provider.remoteControl, false);
     assert.equal(await f.provider.goal('/repo', namespaced('mvs_one')), undefined);
-    await assert.rejects(f.provider.setGoal(namespaced('mvs_one'), 'goal'), /goal-driver/);
-    await assert.rejects(f.provider.clearGoal(namespaced('mvs_one')), /not managed/);
+    await assert.rejects(f.provider.setGoal(namespaced('mvs_one'), 'goal'), /hold a driver/);
+    await f.provider.clearGoal(namespaced('mvs_one'));
     assert.equal(await f.provider.browsers('/repo'), undefined);
     assert.equal(await f.provider.setInstructions(true, {}), undefined);
     await assert.rejects(f.provider.remote({}, true), /local/);
     assert.equal((await f.provider.correct('text', 'fix', 'model')).ok, false);
-    assert.deepEqual(f.calls, []);
+    assert.ok(f.calls.every(call => call.path.endsWith('/goal') || call.path.endsWith('/mvs_one')));
   } finally { f.provider.dispose(); }
   assert.throws(() => f.provider.hold({ id: namespaced('mvs_one'), root: '/repo' }, () => {}, () => {}), /disposed/);
   await assert.rejects(f.provider.create({ root: '/repo' }), /disposed/);
+});
+
+test('auto-starting goals use an attached driver and expose native lifecycle', async () => {
+  const f = fixture(), id = namespaced('mvs_one');
+  const started = [];
+  const driver = {
+    observeGoal: async () => undefined,
+    startGoal: async (objective, existing) => {
+      started.push({ objective, existing });
+      const goal = { objective, status: 'active', turns_used: 0 };
+      f.goals.set('mvs_one', goal);
+      return { goal };
+    },
+    resumeGoal: async () => {
+      const goal = { ...f.goals.get('mvs_one'), status: 'active' };
+      f.goals.set('mvs_one', goal);
+      return { goal };
+    },
+  };
+  try {
+    await assert.rejects(f.provider.startGoal(id, 'Done', {}), /driver/);
+    const first = await f.provider.startGoal(id, 'Done', driver, 'Fix the bug');
+    assert.equal(first.goal.condition, 'Task: Fix the bug\n\nCompletion condition: Done');
+    assert.deepEqual(started, [{ objective: first.goal.condition, existing: false }]);
+    await f.provider.startGoal(id, 'Done', driver, 'Fix the bug');
+    assert.equal(started.length, 1);
+    await f.provider.pauseGoal(id);
+    assert.equal((await f.provider.goal('/repo', id)).status, 'paused');
+    await f.provider.resumeGoal(id, driver);
+    assert.equal((await f.provider.goal('/repo', id)).status, 'active');
+    const read = await f.provider.read('/repo', id);
+    assert.equal(read.goal.condition, first.goal.condition);
+    await f.provider.clearGoal(id);
+    assert.equal(await f.provider.goal('/repo', id), undefined);
+    assert.ok(f.calls.every(call => !call.path.includes('plugin:')));
+  } finally { f.provider.dispose(); }
 });
 
 test('account absence and sign-out do not trigger a quota process', async () => {

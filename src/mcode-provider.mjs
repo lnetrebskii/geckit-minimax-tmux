@@ -9,6 +9,12 @@ import { API, ID, nativeId, namespaced, messages, messageItemsWithImages, contex
 const local = (root) => typeof root === 'string' && !root.startsWith('ssh://');
 const inRoot = (path, root) => path === root || path?.startsWith(root.replace(/\/$/, '') + '/');
 const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+const goalStatus = { active: 'active', paused: 'paused', complete: 'complete', blocked: 'blocked', budget_limited: 'budgetLimited', usage_limited: 'usageLimited' };
+const shownGoal = (native) => native && typeof native.objective === 'string' ? {
+  ...(native.status === 'complete' ? {} : { goal: { condition: native.objective, checks: Number.isSafeInteger(native.turns_used) ? native.turns_used : 0,
+    ...(typeof native.status_reason === 'string' ? { reason: native.status_reason } : {}) } }),
+  ...(goalStatus[native.status] ? { status: goalStatus[native.status] } : {}),
+} : undefined;
 const modelSelection = (value) => {
   const at = value.indexOf('/');
   if (at <= 0 || at === value.length - 1) throw new Error('Select a provider/model from MCode’s model list.');
@@ -37,7 +43,9 @@ export function create(context = {}, dependencies = {}) {
   const read = async (root, id) => {
     try { await info(root, id); } catch (error) { if (error.status === 404) return undefined; throw error; }
     const saved = await messages(rpc, nativeId(id));
-    return { items: (await Promise.all(saved.map(message => messageItemsWithImages(message, root)))).flat(), tasks: await backgroundTasks(rpc, nativeId(id)), ...contextSpend(saved) };
+    const native = await rpc.request(`${API}/session/${nativeId(id)}/goal`);
+    return { items: (await Promise.all(saved.map(message => messageItemsWithImages(message, root)))).flat(), tasks: await backgroundTasks(rpc, nativeId(id)), ...contextSpend(saved),
+      ...(shownGoal(native.goal)?.goal ? { goal: shownGoal(native.goal).goal } : {}) };
   };
   // The plan is the account's, so it is said once for every conversation.
   const reportPlan = async () => {
@@ -52,7 +60,7 @@ export function create(context = {}, dependencies = {}) {
   const provider = {
     id: ID, family: ID, name: 'MiniMax Code (tmux)', shortName: 'MCode', icon: 'terminal', browser: 'none',
     loginCommand: 'mcode login --region global', resumeCommand: 'mcode --session {id}', planName: 'MiniMax', localOnly: true,
-    available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: false,
+    available: true, subscriptionOnly: false, images: true, remoteControl: false, nativeGoals: true, autoStartingGoals: true,
     idleMs: 3600000, waitForExit: true, instructions: 'own', setInstructions: async (enabled) => { guide.set(enabled); },
     program: dependencies.program ?? program,
     account: async () => {
@@ -129,9 +137,28 @@ export function create(context = {}, dependencies = {}) {
     has: async (root, id) => { try { await info(root, id); return true; } catch (error) { if (error.status === 404) return false; throw error; } },
     read,
     links: async (root, id) => messageLinks((await read(root, id))?.items ?? []),
-    goal: async () => undefined,
-    setGoal: async () => { throw new Error('Native MCode goals need a GeckIt goal-driver lifecycle; this provider does not advertise nativeGoals.'); },
-    clearGoal: async () => { throw new Error('Native MCode goals are not managed by this provider.'); },
+    goal: async (root, id) => { await info(root, id); return shownGoal((await rpc.request(`${API}/session/${nativeId(id)}/goal`)).goal); },
+    setGoal: async () => { throw new Error('MCode goals start a turn; hold a driver and call startGoal.'); },
+    startGoal: async (id, objective, driver, message) => {
+      if (typeof driver?.startGoal !== 'function') throw new Error('MCode goal driver is unavailable.');
+      const native = nativeId(id);
+      const current = (await rpc.request(`${API}/session/${native}/goal`)).goal;
+      const task = message?.trim();
+      const effective = task && task !== objective ? `Task: ${task}\n\nCompletion condition: ${objective}` : objective;
+      if (current?.status === 'active') {
+        if (typeof driver.observeGoal !== 'function') throw new Error('MCode goal observer is unavailable.');
+        await driver.observeGoal();
+        if (current.objective === effective) return shownGoal(current);
+        return shownGoal((await rpc.request(`${API}/session/${native}/goal`, 'PATCH', { objective: effective })).goal);
+      }
+      return shownGoal((await driver.startGoal(effective, current !== undefined)).goal);
+    },
+    clearGoal: async (id) => { await rpc.request(`${API}/session/${nativeId(id)}/goal`, 'DELETE'); },
+    pauseGoal: async (id) => { await rpc.request(`${API}/session/${nativeId(id)}/goal`, 'PATCH', { status: 'paused' }); },
+    resumeGoal: async (_id, driver) => {
+      if (typeof driver?.resumeGoal !== 'function') throw new Error('MCode goal driver is unavailable.');
+      await driver.resumeGoal();
+    },
     rename: async (id, title) => { await rpc.request(`${API}/session/${nativeId(id)}`, 'PATCH', { title }); },
     remote: async () => { throw new Error('MCode tmux supports local projects only.'); },
     mcp: async (_root, change) => {

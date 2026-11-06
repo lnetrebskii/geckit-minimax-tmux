@@ -4,6 +4,8 @@ Audit date: 2026-11-03. Scope: the MiniMax library ↔ GeckIt apiVersion 1 bound
 
 Pinned host source: [69ad36623228400acc4b2fa94a4368fb91033d3f](https://github.com/anetrebskii/geckit/tree/69ad36623228400acc4b2fa94a4368fb91033d3f). Provider/Driver declarations match the source used for the installed host inspection. The snapshot in `test/fixtures/geckit-contracts.json` retains complete comment-stripped declarations, source paths and SHA-256 hashes. The member column below is an index; inherited and nested field types remain in the declarations.
 
+Follow-up in separate host checkout adds optional `autoStartingGoals`/`startGoal` and an optional driver argument to `resumeGoal`; the pinned snapshot remains a baseline compatibility fixture. The adapter now enables native goals only with the attached-driver lifecycle. See INTEGRATION-AUDIT.md for the new behavior and tests.
+
 **Checked is not the same as implemented.** Unsupported surfaces are explicitly recorded. Automated tests cover behavior listed in the verification section, not every possible UI state.
 
 ## All exposed and directly related types
@@ -17,7 +19,7 @@ Pinned host source: [69ad36623228400acc4b2fa94a4368fb91033d3f](https://github.co
 | `PluginLogValue` | Alias / index signature; see pinned declaration | Current values are strings/numbers; optional field types need no implementation. |
 | `LlmProvider` | `available`, `localOnly`, `subscriptionOnly`, `images`, `remoteControl`, `nativeGoals`, `idleMs`, `waitForExit`, `account`, `program`, `models`, `limits`, `list`, `search`, `hidden`, `create`, `fork`, `has`, `read`, `links`, `goal`, `setGoal`, `clearGoal`, `pauseGoal`, `resumeGoal`, `hold`, `rename`, `remote`, `mcp`, `browsers`, `correct`, `setInstructions`, `delete`, `dispose` | Every required member checked against this pinned declaration. Behavioral coverage and unsupported methods are listed in INTEGRATION-AUDIT.md. |
 | `ProviderRow` | Alias / index signature; see pinned declaration | id/root/title/at/created/model and parent project are mapped. stands is empty; driven is always true, including imported native sessions: semantic gap. Actual reasoning, work item, cost and used context are not listed. |
-| `ProviderGoal` | Alias / index signature; see pinned declaration | Stub: no native goal/status/end-state synchronization. |
+| `ProviderGoal` | Alias / index signature; see pinned declaration | Native GET/POST/PATCH status mapped; completed goals omit the active condition. |
 | `ProviderFork` | Alias / index signature; see pinned declaration | Native fork point and copied history. Requested model is selected on the new native session; mode is applied at hold. |
 | `ProviderLimits` | Alias / index signature; see pinned declaration | Context windows, legacy plan and generic quotas supplied. An initial limits call loads model capacities if needed. |
 | `ProviderBrowser` | Alias / index signature; see pinned declaration | Unsupported; undefined result. |
@@ -28,7 +30,7 @@ Pinned host source: [69ad36623228400acc4b2fa94a4368fb91033d3f](https://github.co
 | `Held` | `stdin`, `stdout`, `stderr`, `on`, `once`, `kill`, `leave` | Not provided: custom/remote launch transport is unsupported. Native process is owned internally. |
 | `Conversation` | `items`, `cost`, `goal`, `tasks` | Restores text, tools, local user/tool images, write paths and background tasks with output-file references; context is included. Unknown cost and native goals omitted. |
 | `Found` | `id`, `title`, `stands`, `at`, `driven`, `model`, `used`, `work`, `cwd` | Native listing supplies core fields; same omissions and driven semantics as ProviderRow. |
-| `GoalRead` | `goal`, `ended`, `met` | Native goals not advertised. goal returns undefined; setGoal/clearGoal explicitly reject unsupported mutations rather than pretending success. |
+| `GoalRead` | `goal`, `ended`, `met` | Native goal/status read from MCode; bare setGoal rejects because starting a goal requires a held consumer. |
 | `Usage` | `plan`, `windows` | windows Map plus optional legacy plan. Initial quotas may wait for account load; stale cached data can be returned while refresh runs. |
 | `McpChange` | `name`, `enabled` | name is URL-encoded, enabled is passed to native PATCH. Native config is global, not per requested root. |
 | `Wanted` | `elicitation`, `write`, `command`, `web`, `read`, `question`, `start`, `other` | Only question is emitted, including native approvals. Other 7 variants are absent. Native approval cards therefore bypass host permission classification/Auto re-evaluation and remain explicit questions. |
@@ -54,7 +56,7 @@ Pinned host source: [69ad36623228400acc4b2fa94a4368fb91033d3f](https://github.co
 | `ClaudeAccount` | `usage`, `provider`, `limits`, `here`, `signedIn`, `plan`, `key`, `who`, `program` | Native authentication, selected model billing source, program, plan and usage. API-key accounts omit subscription quota and report signedIn only when the selected native model is enabled. Opaque account identity is not exposed by account/read and remains omitted. |
 | `ClaudeProgram` | `version`, `from`, `path` | Version and resolved executable path supplied; account.program includes installation provenance. |
 | `ClaudeModel` | `pricing`, `reasoning`, `defaultReasoning`, `isDefault`, `value`, `name`, `says`, `id`, `version`, `contextWindow`, `maxOutputTokens`, `supportsAdaptiveThinking`, `supportsFastMode`, `supportsAutoMode`, `disabled` | Native IDs/default/disabled/context/output/recognized efforts and defaultReasoning supplied when known. Unknown capability flags and pricing omitted. |
-| `SessionGoal` | `condition`, `checks`, `reason` | No synchronized condition/checks/reason from MCode. Host display alone does not establish a working goal lifecycle. |
+| `SessionGoal` | `condition`, `checks`, `reason` | Native objective, turns used and status reason mapped. |
 | `Answered` | `ok`, `text`, `error`, `plan`, `heard` | correct() returns ok=false plus error. Successful text/plan/heard responses unsupported. |
 | `CodexLimitWindow` | `usedPercent`, `windowDurationMins`, `resetsAt` | Not used by this MiniMax provider. |
 | `CodexRateLimit` | `limitId`, `limitName`, `normalModelSlug`, `primary`, `secondary` | Not used by this MiniMax provider. |
@@ -97,7 +99,7 @@ The public export aliases are: `ProviderSessionOptions` → `ClaudeOptions`, `Pr
 | `task` | Native task snapshots emitted on change, including terminal states. Output path enables host output reading; control stop_task uses native stop. |
 | `begun` | Emitted for adapter sends and observed unsolicited native working turns. |
 | `held` | Absent; no native hook continuation events. |
-| `goal` | Absent; no native goal-state integration. |
+| `goal` | Host emits accepted goal mutations and reads native status after turns; MCode has no dedicated streamed goal event. |
 | `ended` | done/stopped/failed, plus signedOut/limit for authoritative HTTP 401/429. Unknown terminal error dialogs, blocked reasons and reset times are not guessed. offPlan is host-owned. |
 
 ## Native transport and lifecycle boundary
@@ -165,10 +167,10 @@ implement every DesktopService endpoint.
   tmux distribution checks verify discovery and artifact integrity.
 
 No destructive tests against real user history, real model prompts, clipboard
-clicks, full phone flows, or all supported MCode versions were run. Native goals remain disabled pending a host lifecycle integration. Background tasks, local image restoration and scoped launch instructions now have behavioral coverage. Cloud-only attachments, structured MCP elicitation, retry/hook events and unknown terminal errors remain limitations.
+clicks, full phone flows, or all supported MCode versions were run. Native goal kickoff has fake-MCode permission/history coverage in the separate host integration. Background tasks, local image restoration and scoped launch instructions have behavioral coverage. Cloud-only attachments, structured MCP elicitation, retry/hook events and unknown terminal errors remain limitations.
 
 Validation before this follow-up: 38 automated tests passed. The follow-up adds native state, task, guide and image regression tests; see INTEGRATION-AUDIT.md for the final result. A read-only smoke check against installed MCode 0.7.4 completed initialization, account/read (authenticated) and models/list (two models) with the hardened transport. No model request was made.
 
 ## Follow-up implementations
 
-Instructions are appended only to provider-owned TUI launches and preserve the Manager prompt. Source-app guide/CLI overrides take precedence; missing builtin guide files use a bundled minimal GeckIt guide. Disabling affects subsequent driver launches, not a system prompt already loaded by MCode. No global user instruction file is rewritten. Native goal writes explicitly reject while nativeGoals remains false: the current host can start native goals without a held driver, leaving auto-started MCode permissions without a card. UI rename is also incorrectly gated on nativeGoals in the host.
+Instructions are appended only to provider-owned TUI launches and preserve the Manager prompt. Source-app guide/CLI overrides take precedence; missing builtin guide files use a bundled minimal GeckIt guide. Disabling affects subsequent driver launches, not a system prompt already loaded by MCode. No global user instruction file is rewritten. The separate host checkout now attaches a driver before native goal kickoff, and UI rename no longer depends on nativeGoals.

@@ -55,7 +55,12 @@ export function terminalScreen(text) {
   const working = /Esc (?:interrupt|to interrupt|stop)|esc (?:interrupt|to interrupt|stop)|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/.test(status);
   const footer = prompt < 0 ? '' : lines.slice(prompt + 2).join('\n');
   const mode = /[│|]\s*(Auto|Ask|Manual|Full|Plan)\s*[│|]/.exec(footer)?.[1];
+  // A rejected submission (usage limit, auth, provider error) ends in MCode's
+  // error status line above the composer, which holds the restored draft.
+  const errorAt = prompt < 2 ? -1 : lines.findLastIndex((line, index) => index < prompt - 1 && /^\s*×\s+Error\s+·\s/.test(line));
+  const error = errorAt === -1 || prompt - errorAt > 8 ? undefined : lines.slice(errorAt, prompt - 2).join(' ').replace(/^\s*×\s+Error\s+·\s+/, '').replace(/\s+/g, ' ').trim();
   return { kind: working ? 'working' : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? 'idle' : 'unknown', text: body,
+    ...(!working && error ? { error } : {}),
     ...(mode ? { mode: { Auto: 'auto', Ask: 'manual', Manual: 'manual', Full: 'bypassPermissions', Plan: 'plan' }[mode] } : {}) };
 }
 // Keep terminal history and frame borders out of the active question.
@@ -190,7 +195,18 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       if (!turn) { baseline = new Set(saved.map(message => message.msg_id)); turn = true; emit([], [], [{ kind: 'begun' }]); }
       activity = true;
     }
-    if (turn && (activity || stopping) && shown.kind === 'idle') {
+    if (turn && !stopping && shown.kind === 'idle' && shown.error) {
+      // MCode refused the turn before it began: nothing reaches the transcript
+      // and no spinner is shown, so wait only for the native turn to be idle.
+      const native = await rpc.request(`${API}/session/${options.id}/activity`);
+      if (native.state === 0) idle++; else idle = 0;
+      if (idle >= 2) {
+        // The rejected prompt is restored into the composer; clear it so the
+        // next delivery is not merged with it. GeckIt keeps the user's message.
+        await tmux(['send-keys', '-t', name, 'C-c']).catch(() => {});
+        finish(/usage limit|rate limit/i.test(shown.error) ? 'limit' : 'failed', shown.error);
+      }
+    } else if (turn && (activity || stopping) && shown.kind === 'idle') {
       // A transcript alone is insufficient: helpers/tools can still be active.
       const native = await rpc.request(`${API}/session/${options.id}/activity`);
       if (native.state === 0) idle++; else idle = 0;
@@ -306,6 +322,40 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       if (!attached) throw new Error('MCode did not accept the image attachment.');
     }
   };
+  const prepare = async () => {
+    await requireLogin();
+    const fresh = started === undefined;
+    started ??= start(); await started; await applying; await ready();
+    if (fresh && options.mode) {
+      const mode = { manual: 'ask', auto: 'auto', plan: 'ask', bypassPermissions: 'full' }[options.mode];
+      if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
+      await paste(`/permission ${mode}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
+      await delay(350); await ready();
+      await paste(`/plan ${options.mode === 'plan' ? 'on' : 'off'}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
+      await delay(350); await ready();
+    }
+    while (wanted && !closed) { await ready(); await applyPermission(true); }
+    baseline = new Set((await refresh()).map((message) => message.msg_id));
+  };
+  const goalTurn = async (method, body) => {
+    if (closed || submitting || turn) throw new Error('MCode is not ready for a goal turn.');
+    submitting = true;
+    try {
+      await prepare();
+      if (closed || stopping) throw new Error('MCode stopped before goal delivery.');
+      turn = true; stopping = false; activity = false; idle = 0;
+      emit([], [], [{ kind: 'begun' }]);
+      // Native goal admission may wait while MCode asks for permission. Poll its TUI during the request.
+      submitting = false;
+      const result = await rpc.request(`${API}/session/${options.id}/goal`, method, body);
+      log('info', 'goal.started', { session: options.id, operation: method });
+      return result;
+    } catch (error) {
+      finish(error.status === 401 ? 'signedOut' : error.status === 429 ? 'limit' : 'failed', error.message);
+      await close();
+      throw error;
+    } finally { submitting = false; }
+  };
   const driver = {
     send(text, images = [], before = []) {
       if (closed || submitting || turn) throw new Error('MCode is not ready for a new turn.');
@@ -313,25 +363,16 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       submitting = true; turn = true; stopping = false; activity = false; idle = 0;
       emit([], [], [{ kind: 'begun' }]);
       void (async () => {
-        await requireLogin();
-        const fresh = started === undefined;
-        started ??= start(); await started; await applying; await ready();
-        if (fresh && options.mode) {
-          const mode = { manual: 'ask', auto: 'auto', plan: 'ask', bypassPermissions: 'full' }[options.mode];
-          if (!mode) throw new Error(`Unsupported MCode permission mode: ${options.mode}`);
-          await paste(`/permission ${mode}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
-          await delay(350); await ready();
-          await paste(`/plan ${options.mode === 'plan' ? 'on' : 'off'}`, async () => { if (closed || stopping) throw new Error('MCode stopped.'); });
-          await delay(350); await ready();
-        }
-        while (wanted && !closed) { await ready(); await applyPermission(true); }
-        baseline = new Set((await refresh()).map((message) => message.msg_id));
+        await prepare();
         const guard = async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); };
         await attach(images, guard);
         await paste(prompt, guard);
         log('info', 'message.sent', { session: options.id, delivery: 'send' });
       })().catch(async (error) => { finish(stopping ? 'stopped' : error.status === 401 ? 'signedOut' : error.status === 429 ? 'limit' : 'failed', error.message); await close(); }).finally(() => { submitting = false; });
     },
+    startGoal: (objective, existing = false) => goalTurn(existing ? 'PATCH' : 'POST', existing ? { objective, status: 'active' } : { objective }),
+    observeGoal: async () => { if (closed) throw new Error('MCode is closed.'); started ??= start(); await started; },
+    resumeGoal: () => goalTurn('PATCH', { status: 'active' }),
     async inject(text, images = [], before = []) {
       if (closed || !turn || stopping || submitting || pending || login.active) throw new Error('MCode cannot accept guidance now; the message remains queued.');
       const prompt = input(text, images, before);
