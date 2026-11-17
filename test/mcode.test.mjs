@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { create } from '../index.mjs';
-import { terminalScreen } from '../src/mcode-terminal.mjs';
+import { holdMcode, terminalScreen } from '../src/mcode-terminal.mjs';
 import { nativeId, messageItems, contextSpend, messages, messageLinks } from '../src/mcode-history.mjs';
 import { McodeRpc } from '../src/mcode-rpc.mjs';
 import { parseQuota, quotaDuration, quotaReader } from '../src/mcode-quota.mjs';
@@ -242,7 +242,7 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.equal((await p.limits(['minimax/MiniMax-Test'])).windows.get('minimax/MiniMax-Test'), 512000);
     const id = await p.create({ root: directory });
     const events = []; let closed = 0;
-    const managerPrompt = "Manager's role\nKeep literal $(echo unchanged) and Unicode ю🙂";
+    const managerPrompt = "Manager's role\nKeep literal $(echo unchanged) and Unicode ю🙂\n".repeat(700);
     driver = p.hold({ id, root: directory, mode: 'auto', managerPrompt }, (event) => events.push(event), () => closed++);
     const ended = () => events.flatMap((event) => event.signals).filter((signal) => signal.kind === 'ended');
     const prompt = "Long prompt with apostrophe ' and literal $(touch should-not-exist)\n" + 'ю🙂'.repeat(120);
@@ -250,6 +250,11 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     assert.equal(ended()[0].how, 'done');
     const startupArgs = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).startupArgs;
     assert.equal(startupArgs[startupArgs.indexOf('--append-system-prompt') + 1], managerPrompt);
+    const terminal = execFileSync('tmux', ['-L', server, 'list-panes', '-a', '-F', '#{pane_start_command}'], { encoding: 'utf8' });
+    const script = terminal.match(/(\/[^']*geckit-mcode-launch-[^']*\/start\.sh)/)?.[1];
+    assert.ok(script);
+    assert.equal((await stat(script)).mode & 0o777, 0o600);
+    assert.equal((await stat(join(script, '..'))).mode & 0o777, 0o700);
     const history = await p.read(directory, id);
     assert.equal(history.items[0].text, prompt); assert.equal(history.items[1].text, 'answer: ' + prompt);
     const sessionFile = join(directory, nativeId(id) + '.json');
@@ -298,6 +303,7 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     const endingAgain = driver.end();
     assert.equal(ending, endingAgain);
     await endingAgain; assert.equal(closed, 1);
+    await assert.rejects(stat(script), { code: 'ENOENT' });
     for (const image of [...received, ...guided]) await assert.rejects(stat(image.path), { code: 'ENOENT' });
     const next = []; resumed = p.hold({ id, root: directory, resume: true }, (event) => next.push(event), () => {});
     resumed.send('followup'); await until(() => next.some((event) => event.signals.some((signal) => signal.kind === 'ended' && signal.how === 'done')));
@@ -308,6 +314,35 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
   } finally {
     await driver?.end(); await resumed?.end(); p.dispose();
     try { execFileSync('tmux', ['-L', server, 'kill-server'], { stdio: 'ignore' }); } catch {}
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('failed terminal startup removes its private launch script', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'geckit-mcode-launch-failure-'));
+  const executable = join(directory, 'tmux');
+  const recorded = join(directory, 'args.json');
+  await writeFile(executable, `#!${process.execPath}\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(recorded)}, JSON.stringify(process.argv.slice(2)));\nprocess.exit(1);\n`, { mode: 0o700 });
+  const events = [];
+  let closed = false;
+  const driver = holdMcode({
+    rpc: { request: async (path) => path.endsWith('/session/mvs_test') ? { session: { workspace_dir: directory } } : {} },
+    options: { id: 'mvs_test', root: directory, model: 'custom/test' },
+    tmuxProgram: async () => ({ file: executable, server: [] }),
+    command: () => '/unused/mcode',
+    hear: (event) => events.push(event),
+    left: () => { closed = true; },
+  });
+  try {
+    driver.send('unsent');
+    await until(() => closed);
+    const args = JSON.parse(await readFile(recorded, 'utf8'));
+    const script = args[args.indexOf(directory) + 1].match(/(\/[^']*geckit-mcode-launch-[^']*\/start\.sh)/)?.[1];
+    assert.ok(script);
+    await assert.rejects(stat(script), { code: 'ENOENT' });
+    assert.ok(events.some(event => event.signals.some(signal => signal.kind === 'ended' && signal.how === 'failed')));
+  } finally {
+    await driver.end();
     await rm(directory, { recursive: true, force: true });
   }
 });

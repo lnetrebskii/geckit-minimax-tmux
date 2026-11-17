@@ -654,7 +654,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
   if (options.launch || options.fork) throw new Error("MCode tmux requires local launch and a natively forked session.");
   const name = `geckit-minimax-${randomUUID3().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory, wanted, applying, closing;
+  let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
   let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = /* @__PURE__ */ new Map();
   const emit = (items = [], gone = [], signals = []) => {
@@ -762,6 +762,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       running = false;
       try {
         if (imagesDirectory) await rm(imagesDirectory, { recursive: true, force: true });
+        if (launchDirectory) await rm(launchDirectory, { recursive: true, force: true });
       } finally {
         left();
         log("info", "session.closed", { session: options.id });
@@ -840,7 +841,11 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     const removed = Object.keys(process.env).filter((key2) => key2.startsWith("GECKIT_"));
     const launch = ["exec", "env", ...removed.flatMap((key2) => ["-u", key2]), `PATH=${env.PATH}`, ...["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "MINIMAX_PROFILE", "MAVIS_PROFILE"].filter((key2) => env[key2]).map((key2) => `${key2}=${env[key2]}`), ...args].map(quote2).join(" ");
     if (closed) return;
-    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch, ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
+    launchDirectory = await mkdtemp(join3(tmpdir(), "geckit-mcode-launch-"));
+    const script = join3(launchDirectory, "start.sh");
+    await writeFile(script, `${launch}
+`, { mode: 384 });
+    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, ["/bin/sh", script].map(quote2).join(" "), ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
     running = true;
     log("info", "session.started", { session: options.id });
     emit([], [], [{ kind: "started", session: namespaced(options.id), key, ...options.model ? { model: options.model } : {} }]);
