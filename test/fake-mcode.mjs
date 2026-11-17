@@ -86,10 +86,10 @@ const at = args.indexOf('--session');
 const id = at < 0 ? undefined : args[at + 1];
 if (id) { const data = get(id); data.startupArgs = args; save(data); }
 let attachments = [], pasteStart = 0;
-let input = '', pasting = false, busy = false, goalMode = false, permission = false, timer;
+let input = '', pasting = false, busy = false, goalMode = false, permission = false, timer, permissionMode = 'Auto';
 const paint = (body) => process.stdout.write('\x1b[2J\x1b[H' + body);
-const prompt = '    ───────────────────────────────────\n  › Ask Mcode to do anything\n    ───────────────────────────────────\n  project │ Auto │ ✦ Test │ Context 512K\n';
-const imageLabels = () => prompt.replace('Ask Mcode to do anything', attachments.length ? attachments.map((_, i) => `[Image #${i + 1}]`).join(' ') : 'Ask Mcode to do anything');
+const prompt = () => '    ───────────────────────────────────\n  › Ask Mcode to do anything\n    ───────────────────────────────────\n  project │ ' + permissionMode + ' │ ✦ Test │ Context 512K\n';
+const imageLabels = () => prompt().replace('Ask Mcode to do anything', attachments.length ? attachments.map((_, i) => `[Image #${i + 1}]`).join(' ') : 'Ask Mcode to do anything');
 const idle = () => paint('[Image #1] from a previous turn\nMessage · Enter send · Ctrl+J newline\n' + imageLabels());
 const working = () => paint('[Image #1] from a previous turn\n⠋ Working · Esc interrupt\n' + imageLabels());
 const status = () => paint([
@@ -134,6 +134,7 @@ const reply = (text) => {
 };
 const submit = (text) => {
   if (text.startsWith('/permission ') || text.startsWith('/plan ')) {
+    if (text.startsWith('/permission ')) permissionMode = { ask: 'Ask', auto: 'Auto', full: 'Full' }[text.split(' ')[1]];
     if (id) { const data = get(id); (data.commands ??= []).push(text); save(data); }
     idle(); return;
   }
@@ -144,6 +145,9 @@ const submit = (text) => {
   message('user', text); active(true); working();
   if (text === 'hold') return;
   if (text === 'permission') { permission = true; paint('╭─ ◆ Approval required ─╮\nRun this command?\n  › 1 Allow for this conversation\n    2 Always allow matching actions\n    3 Deny and guide MCode\nEnter select · Esc cancel\n'); return; }
+  if (text === 'question') { permission = true; paint('╭─ Ask ─╮\nAllow for this conversation\n› 1 Allow for this conversation\n  2 No\n↑↓ move · 1-2 select · Enter send\n'); return; }
+  if (text === 'confirm-rule') { permission = true; paint('╭─ ◆ Save permission rule ─╮\nAlways allow matching actions?\nEnter select · Esc cancel\n'); return; }
+  if (text === 'unknown-dialog') { permission = true; paint('Unknown approval dialog\nPress 1 to continue\n'); return; }
   if (text === 'crash') process.exit(1);
   timer = setTimeout(() => reply('answer: ' + text), 250);
 };
@@ -168,7 +172,8 @@ process.stdin.on('data', (bytes) => {
     if (pasting) { input += char; continue; }
     if (char === '\x1b') { clearTimeout(timer); permission = false; active(false); idle(); continue; }
     if (char === '\x04' && input === '') process.exit(0);
-    if (permission && char === '1') { permission = false; reply('allowed'); continue; }
+    if (permission && char === '1') { permission = false; const data = get(id); data.approvals = (data.approvals ?? 0) + 1; save(data); reply('allowed'); continue; }
+    if (permission && char === '3') { permission = false; reply('denied'); continue; }
     if (char === '\x15') { input = ''; continue; }
     if (char === '\r' || char === '\n') { const text = input; input = ''; submit(text); }
     else input += char;

@@ -277,6 +277,7 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     const received = JSON.parse(await readFile(join(directory, nativeId(id) + '.json'))).receivedImages;
     assert.deepEqual(received.map(image => image.data), pictures.map(image => image.data));
     for (const image of received) assert.equal((await stat(image.path)).mode & 0o777, 0o600);
+    driver.permit('manual');
     driver.send('permission'); await until(() => events.some((event) => event.signals.some((signal) => signal.kind === 'asks')));
     const ask = events.flatMap((event) => event.signals).findLast((signal) => signal.kind === 'asks');
     const card = events.flatMap(event => event.items).find(item => item.id === `card:${ask.ask}`);
@@ -360,7 +361,7 @@ test('native goal kickoff is observed by the attached driver, including permissi
   try {
     const id = await provider.create({ root: directory });
     const events = [];
-    driver = provider.hold({ id, root: directory, mode: 'auto' }, (event) => events.push(event), () => {});
+    driver = provider.hold({ id, root: directory, mode: 'manual' }, (event) => events.push(event), () => {});
     const created = await provider.startGoal(id, 'permission', driver);
     assert.equal(created.goal.condition, 'permission');
     await until(() => events.some(event => event.signals.some(signal => signal.kind === 'asks')));

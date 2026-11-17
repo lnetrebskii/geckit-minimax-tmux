@@ -48,3 +48,9 @@ The goal-lifecycle follow-up passes isolated adapter tests, including fake-MCode
 - Credits are reported as `ProviderQuota.remaining`, independent of active subscription windows. Explicit zero, unknown balance and expired-trial windows remain distinct. No token capacity, spent percentage, original allowance or aggregate expiry is inferred from the balance.
 - [GeckIt PR #51](https://github.com/anetrebskii/geckit/pull/51) adds the optional remaining field and renderer support to GeckIt, plus explicit unavailable explanations. Library updates alone cannot update an older GeckIt renderer.
 - Read-only live verification against installed MCode 0.7.4 returned a credit balance without an active subscription. The private quota TUI was closed after verification; no model request was sent.
+
+## Auto tool approvals (2026-11-17)
+
+Auto retains native `/permission auto` and additionally chooses "Allow for this conversation" on recognized tool approval menus. This includes native web fetch approval menus. No permanent rule or Full permissions command is used. Manual and Plan retain question cards; native Ask dialogs, rule confirmations and unknown layouts remain manual. Switching to Auto can resolve an existing approval without a new host ask identifier, and switching back to Manual or pressing Stop prevents an automatic reply. The current dialog signature is rechecked before input. Native hard denials are unchanged.
+
+Verification: isolated real-tmux tests with the fake MCode CLI cover repeated grants, Manual/Plan, an ordinary question whose label matches the grant, rule confirmations, unknown dialogs, pending mode switches, Stop, and native goal completion. No live account action or GeckIt renderer verification is claimed.

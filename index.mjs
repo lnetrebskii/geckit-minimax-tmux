@@ -603,7 +603,7 @@ function terminalScreen(text) {
     if (choices.length) {
       const options = choices.map((one) => ({ label: one[2], keys: [one[1]] }));
       if (/Ctrl\+E review all/.test(approvalText)) options.push({ label: "Review all details", keys: ["C-e"] });
-      return question(dialogTitle(approvalLines.slice(0, approvalLines.findIndex((line) => /^\s*(?:›\s*)?[123]\s+(?:Allow|Always|Deny)/.test(line)))), options);
+      return { ...question(dialogTitle(approvalLines.slice(0, approvalLines.findIndex((line) => /^\s*(?:›\s*)?[123]\s+(?:Allow|Always|Deny)/.test(line)))), options), approval: true };
     }
   }
   const askAt = lines.findLastIndex((line) => /[╭┌].*\bAsk\b/.test(line));
@@ -655,6 +655,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
   const name = `geckit-minimax-${randomUUID3().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
   let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing;
+  let permissionMode = options.mode;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
   let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = /* @__PURE__ */ new Map();
   const emit = (items = [], gone = [], signals = []) => {
@@ -785,9 +786,20 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
       actualMode = shown.mode;
       emit([], [], [{ kind: "mode", mode: actualMode }]);
     }
+    if (shown.mode && !wanted) permissionMode = shown.mode;
     if (shown.kind === "question") {
       activity = true;
       idle = 0;
+      const allow = shown.approval && shown.options.find((option) => option.label === "Allow for this conversation");
+      if (allow && permissionMode === "auto" && !stopping) {
+        const current = await screen();
+        if (!closed && !stopping && permissionMode === "auto" && current.signature === shown.signature) {
+          await tmux(["send-keys", "-t", name, ...allow.keys]);
+          resolveQuestion();
+          log("info", "session.permission.allowed", { session: options.id, scope: "conversation" });
+          return;
+        }
+      }
       showQuestion(shown);
       return;
     }
@@ -1076,13 +1088,10 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
         log("warn", "permission.reply.failed", { error: error.name });
       });
     },
-    permit(mode, again = []) {
+    permit(mode) {
       if (closed || !["manual", "auto", "bypassPermissions"].includes(mode)) return;
+      permissionMode = mode;
       wanted = mode;
-      if (mode === "auto" && pending !== void 0 && again.includes(pending.id)) {
-        const allow = pending.options.find((option) => /^Allow for this conversation$/.test(option.label));
-        if (allow !== void 0) this.answer(pending.id, allow.label);
-      }
       void applyPermission().catch((error) => {
         log("warn", "session.permission.failed", { error: error.name });
       });

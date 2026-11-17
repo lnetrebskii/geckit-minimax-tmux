@@ -33,7 +33,7 @@ Follow-up in separate host checkout adds optional `autoStartingGoals`/`startGoal
 | `GoalRead` | `goal`, `ended`, `met` | Native goal/status read from MCode; bare setGoal rejects because starting a goal requires a held consumer. |
 | `Usage` | `plan`, `windows` | windows Map plus optional legacy plan. Initial quotas may wait for account load; stale cached data can be returned while refresh runs. |
 | `McpChange` | `name`, `enabled` | name is URL-encoded, enabled is passed to native PATCH. Native config is global, not per requested root. |
-| `Wanted` | `elicitation`, `write`, `command`, `web`, `read`, `question`, `start`, `other` | Only question is emitted, including native approvals. Other 7 variants are absent. Native approval cards therefore bypass host permission classification/Auto re-evaluation and remain explicit questions. |
+| `Wanted` | `elicitation`, `write`, `command`, `web`, `read`, `question`, `start`, `other` | Only question is emitted, including native approvals. Other 7 variants are absent. The adapter handles recognized tool approval menus in Auto with the native conversation-scoped grant; Manual/Plan and ordinary questions remain explicit question cards. |
 | `LlmProviderInfo` | `id`, `family`, `transport`, `name`, `shortName`, `icon`, `iconPath`, `browser`, `loginCommand`, `planName`, `resumeCommand`, `source`, `localOnly`, `replaces`, `runtime`, `instructions` | id/family/name/shortName/icon/browser/loginCommand/planName/resumeCommand/source/localOnly/instructions supplied by manifest. Optional iconPath absent; reserved transport/replaces and Codex runtime deliberately absent. |
 | `LlmProviderId` | Alias / index signature; see pinned declaration | Independent plugin:minimax-tmux identity; namespace conversion validated in both directions. |
 | `SessionMode` | Alias / index signature; see pinned declaration | manual→ask, auto→auto, plan→ask plus /plan on. Plan applies on a new driver. Additional internal bypassPermissions support is outside this public enum and not advertised. |
@@ -88,7 +88,7 @@ The public export aliases are: `ProviderSessionOptions` → `ClaudeOptions`, `Pr
 | `said` | Changed assistant transcript text reported. |
 | `retry` | Absent; native retry status not exposed. |
 | `writing` | Absolute paths from running native write/edit calls. |
-| `asks` | Native dialogs become question requests with native choice labels. Permission classification is not inferred. |
+| `asks` | Manual/Plan tool approvals and ordinary dialogs become question requests with native choice labels. Auto handles recognized tool approval menus internally with the conversation-scoped grant. |
 | `resolved` | Emitted when the terminal dialog disappears or is answered; card ID removed via `gone`. |
 | `mode` | Observed permission label from the current TUI footer, never inferred from requested mode or quoted transcript. |
 | `model` | Actual selected model polled through session-scoped models/list. |
