@@ -282,7 +282,11 @@ test('fake native mcode: bundled provider, exact multiline input, permissions, s
     const ask = events.flatMap((event) => event.signals).findLast((signal) => signal.kind === 'asks');
     const card = events.flatMap(event => event.items).find(item => item.id === `card:${ask.ask}`);
     assert.equal(card.card.title.includes('\n'), false);
-    assert.match(card.card.detail, /Run this command/);
+    assert.equal(card.card.title, 'Allow web_fetch?');
+    assert.match(card.card.where, /local network context/);
+    assert.equal(card.card.detail, '{"url":"https://base.garant.ru/483634541/"}');
+    assert.equal(card.card.choices.length, 3);
+    assert.doesNotMatch(ask.wanted.question, /[─◆│]/);
     await assert.rejects(driver.inject('blocked', pictures), /cannot accept guidance/);
     driver.answer(ask.ask, ask.wanted.choices[0]); await until(() => ended().length === 3);
     driver.send('hold'); await delay(700); await driver.inject('guidance', pictures); await until(() => ended().length === 4);
@@ -411,4 +415,33 @@ project | Auto | Context 48% left`;
   assert.deepEqual(parsed.options.at(-1).keys, ['C-e']);
   assert.equal(parsed.signature, terminalScreen('Changed transcript\n' + frame).signature);
   assert.equal(parsed.title.includes('\n'), false);
+});
+
+test('approval form presents wrapped native evidence without terminal decoration', async () => {
+  const { webApproval } = await import('./approval-fixture.mjs');
+  const parsed = terminalScreen(webApproval);
+  assert.equal(parsed.title, 'Allow web_fetch?');
+  assert.equal(parsed.detail, '{"url":"https://base.garant.ru/483634541/"}');
+  assert.equal(parsed.where, "Local permission check requires approval: web_fetch will request https://base.garant.ru/483634541/ from this device's local network context.");
+  assert.deepEqual(parsed.options, [
+    { label: 'Allow for this conversation', keys: ['1'] },
+    { label: 'Always allow matching actions', keys: ['2'] },
+    { label: 'Deny and guide MCode', keys: ['3'] },
+  ]);
+  assert.equal(parsed.signature, terminalScreen(webApproval.replace('› › 1', '  1')).signature);
+  assert.equal(parsed.approval, true);
+});
+
+test('approval confirmation forms have one title and preserve native evidence and keys', () => {
+  const remember = terminalScreen('Always allow matching actions?\nBash\n$ cat file | sort\nWhy · Save this permission rule\nEnter confirm · Esc back');
+  assert.equal(remember.title, 'Always allow matching actions?');
+  assert.equal(remember.detail, 'Bash\n$ cat file | sort');
+  assert.equal(remember.where, 'Save this permission rule');
+  assert.deepEqual(remember.options.map((one) => one.keys), [['Enter'], ['Escape']]);
+  assert.equal(remember.approval, undefined);
+  const deny = terminalScreen('Deny this action?\n$ cat file | sort\nType your answer · Enter send');
+  assert.equal(deny.title, 'Deny this action?');
+  assert.equal(deny.detail, '$ cat file | sort');
+  assert.equal(deny.input, true);
+  assert.deepEqual(deny.options.map((one) => one.keys), [['Enter'], ['Escape']]);
 });

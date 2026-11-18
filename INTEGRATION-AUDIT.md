@@ -54,3 +54,18 @@ The goal-lifecycle follow-up passes isolated adapter tests, including fake-MCode
 Auto retains native `/permission auto` and additionally chooses "Allow for this conversation" on recognized tool approval menus. This includes native web fetch approval menus. No permanent rule or Full permissions command is used. Manual and Plan retain question cards; native Ask dialogs, rule confirmations and unknown layouts remain manual. Switching to Auto can resolve an existing approval without a new host ask identifier, and switching back to Manual or pressing Stop prevents an automatic reply. The current dialog signature is rechecked before input. Native hard denials are unchanged.
 
 Verification: isolated real-tmux tests with the fake MCode CLI cover repeated grants, Manual/Plan, an ordinary question whose label matches the grant, rule confirmations, unknown dialogs, pending mode switches, Stop, and native goal completion. No live account action or GeckIt renderer verification is claimed.
+
+## User-message echo (2026-11-18)
+
+GeckIt inserts a user item before calling `Driver.send`. The tmux history poll previously emitted the same saved native user record with a different ID, producing a second bubble. A read-only check of the affected session found one matching native MCode message while GeckIt showed two.
+
+Ordinary sends now associate the first new native user record after the pre-send history snapshot with that submission and omit its echo from live events for the lifetime of that driver. Matching uses native IDs, not text or a time window, so command context, image placeholders and repeated text do not change the rule. Saved reads stay complete; pre-existing history, native goals, unsolicited native user messages and injection keep their existing event paths. No native history is rewritten.
+
+The regression test failed before the fix (three visible user items instead of two with one pre-existing message), then passed with the rebuilt bundle. All 69 tests pass, including repeated sends, multiline command context, images, reopen, unsolicited user messages, native goals, permissions and Stop. The tests use isolated real tmux with fake MCode; no real model prompt was sent and the installed GeckIt library was not updated.
+
+
+## Approval form (2026-11-18)
+
+Approval cards now use the native question once, a normal supporting permission reason and a separate code block for arguments or commands. Native terminal borders, duplicate tool headings and cursor markers no longer fill the card. Repeated cursor markers are accepted when parsing choices, restoring the missing conversation-scoped option. Remember and denial confirmations retain their native keys and steps; shell pipes, URLs, full-detail review and Auto eligibility are preserved.
+
+Verification: full suite passes 71/71; the affected suites pass 20/20 after updating the fake CLI to the screenshot layout. The bundled provider was checked through fake MCode and real isolated tmux. The real GeckIt renderer was inspected in a browser at desktop and phone sizes in light and dark themes, including keyboard focus, Enter, confirmation/Back, guidance submission and long evidence scrolling. This used parsed native fixtures and a fake answer boundary; no live account permission was sent. Alex authorized direct delivery of source and bundle to main on 2026-11-18; the installed plugin was not updated. See docs/plans/approval-form.md for evidence and limits.

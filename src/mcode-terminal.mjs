@@ -21,14 +21,14 @@ export function terminalScreen(text) {
   const approval = approvalAt !== -1 && (prompt === -1 || approvalAt > prompt);
   const approvalLines = approval ? dialogLines(lines.slice(approvalAt)) : [];
   const approvalText = approvalLines.join('\n');
-  if (approval && /Always allow matching actions\?/.test(approvalText)) return question(dialogTitle(approvalLines), [{ label: 'Always allow matching actions', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }]);
-  if (approval && /Deny this action\?/.test(approvalText)) return question(dialogTitle(approvalLines), [{ label: 'Deny', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }], true);
+  if (approval && /Always allow matching actions\?/.test(approvalText)) return approvalQuestion(approvalLines, [{ label: 'Always allow matching actions', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }]);
+  if (approval && /Deny this action\?/.test(approvalText)) return approvalQuestion(approvalLines, [{ label: 'Deny', keys: ['Enter'] }, { label: 'Back', keys: ['Escape'] }], true);
   if (approval) {
-    const choices = approvalLines.map((line) => /^\s*[│┃]?\s*(?:›\s*)?([123])\s+(Allow for this conversation|Always allow matching actions|Deny and guide MCode)\b/.exec(line)).filter(Boolean);
+    const choices = approvalLines.map((line) => /^\s*[│┃]?\s*(?:›\s*)*([123])\s+(Allow for this conversation|Always allow matching actions|Deny and guide MCode)\b/.exec(line)).filter(Boolean);
     if (choices.length) {
       const options = choices.map((one) => ({ label: one[2], keys: [one[1]] }));
       if (/Ctrl\+E review all/.test(approvalText)) options.push({ label: 'Review all details', keys: ['C-e'] });
-      return { ...question(dialogTitle(approvalLines.slice(0, approvalLines.findIndex((line) => /^\s*(?:›\s*)?[123]\s+(?:Allow|Always|Deny)/.test(line)))), options), approval: true };
+      return { ...approvalQuestion(approvalLines.slice(0, approvalLines.findIndex((line) => /^\s*(?:›\s*)*[123]\s+(?:Allow|Always|Deny)/.test(line))), options), approval: true };
     }
   }
   const askAt = lines.findLastIndex((line) => /[╭┌].*\bAsk\b/.test(line));
@@ -75,6 +75,16 @@ function dialogTitle(lines) {
   return lines.filter((line) => !/^\s*(?:↑|Enter |Type your answer|Space toggle)/.test(line)).join('\n').trim();
 }
 
+function approvalQuestion(lines, options, input = false) {
+  const request = lines.findIndex((line) => /\?\s*$/.test(line));
+  const title = request < 0 ? 'Approval required' : lines[request].trim();
+  const evidence = lines.slice(request < 0 ? 1 : request + 1).filter((line) => !/^\s*(?:↑|Enter |Type your answer|Space toggle)/.test(line));
+  const why = evidence.findIndex((line) => /^\s*Why\s*[·:]/.test(line));
+  const where = why < 0 ? undefined : evidence.slice(why).map((line) => line.trim()).join(' ').replace(/^Why\s*[·:]\s*/, '').replace(/\s+/g, ' ').trim();
+  const detail = (why < 0 ? evidence : evidence.slice(0, why)).map((line) => line.replace(/^\s*›\s+/, '')).join('\n').trim();
+  return { kind: 'question', title, detail, where, options, input, signature: JSON.stringify({ title, detail, where, options, input }) };
+}
+
 function question(detail, options, input = false) {
   const title = detail.split('\n').find((line) => line.trim()) ?? 'MCode question';
   return { kind: 'question', title, detail, options, input, signature: JSON.stringify({ detail, options, input }) };
@@ -85,10 +95,11 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   if (options.launch || options.fork) throw new Error('MCode tmux requires local launch and a natively forked session.');
   const name = `geckit-minimax-${randomUUID().slice(0, 12)}`;
   let closed = false, running = false, turn = false, stopping = false, submitting = false, polling, started;
-  let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing;
+  let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing, awaitingEcho = false;
   let permissionMode = options.mode;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
   let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = new Map();
+  const sentMessages = new Set();
   const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
   const tmux = async (args, input) => {
     const { file, server } = await tmuxProgram();
@@ -114,16 +125,20 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   const showQuestion = (value) => {
     if (pending?.signature === value.signature) return;
     resolveQuestion(); pending = { ...value, id: `mcode-question:${randomUUID()}` };
-    emit([], [], [{ kind: 'asks', ask: pending.id, wanted: { kind: 'question', question: value.detail, choices: value.options.map((option) => option.label) } }]);
+    emit([], [], [{ kind: 'asks', ask: pending.id, wanted: { kind: 'question', question: value.detail.startsWith(value.title) ? value.detail : [value.title, value.where, value.detail].filter(Boolean).join('\n\n'), choices: value.options.map((option) => option.label) } }]);
     // The host's question title is plain text; use its code/detail field for
     // multiline evidence instead of flattening the whole terminal into a title.
-    emit([{ kind: 'card', id: `card:${pending.id}`, card: { kind: 'question', title: value.title, detail: value.detail, choices: value.options.map((option) => option.label) } }]);
+    emit([{ kind: 'card', id: `card:${pending.id}`, card: { kind: 'question', title: value.title, detail: value.detail || undefined, ...(value.where ? { where: value.where } : {}), choices: value.options.map((option) => option.label) } }]);
   };
   const refresh = async () => {
     const saved = await messages(rpc, options.id);
+    if (awaitingEcho) {
+      const echo = saved.find(message => message.role === 'user' && !baseline.has(message.msg_id));
+      if (echo) { sentMessages.add(echo.msg_id); awaitingEcho = false; }
+    }
     const items = (await Promise.all(saved.map(message => messageItemsWithImages(message, options.root)))).flat();
     const current = new Map(items.map((item) => [item.id, JSON.stringify(item)]));
-    const changed = items.filter((item) => previous.get(item.id) !== current.get(item.id));
+    const changed = items.filter((item) => previous.get(item.id) !== current.get(item.id) && !(item.kind === 'mine' && sentMessages.has(item.id)));
     const gone = [...previous.keys()].filter((id) => !current.has(id));
     if (turn && saved.some((message) => !baseline.has(message.msg_id))) activity = true;
     const spend = contextSpend(saved);
@@ -157,7 +172,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   };
   const finish = (how, text) => {
     if (!turn) return;
-    turn = false; stopping = false; idle = 0;
+    turn = false; stopping = false; idle = 0; awaitingEcho = false;
     if (how === 'signedOut') emit([{ kind: 'note', id: `mcode-signin:${randomUUID()}`, note: 'failed', text: loginInstruction }]);
     emit([], [], [{ kind: 'ended', how, ...(text ? { text } : {}) }]);
     log('info', 'session.turn.ended', { session: options.id, outcome: how });
@@ -383,6 +398,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
       emit([], [], [{ kind: 'begun' }]);
       void (async () => {
         await prepare();
+        awaitingEcho = true;
         const guard = async () => { if (closed || stopping) throw new Error('MCode delivery stopped.'); };
         await attach(images, guard);
         await paste(prompt, guard);

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import { webApproval } from './approval-fixture.mjs';
 const directory = process.env.MCODE_TEST_DIR;
 const path = (id) => join(directory, id + '.json');
 const get = (id) => JSON.parse(readFileSync(path(id), 'utf8'));
@@ -144,7 +145,7 @@ const submit = (text) => {
   if (attachments.length) { const data = get(id); data.receivedImages = attachments.map(path => ({ path, data: readFileSync(path).toString('base64') })); save(data); attachments = []; }
   message('user', text); active(true); working();
   if (text === 'hold') return;
-  if (text === 'permission') { permission = true; paint('╭─ ◆ Approval required ─╮\nRun this command?\n  › 1 Allow for this conversation\n    2 Always allow matching actions\n    3 Deny and guide MCode\nEnter select · Esc cancel\n'); return; }
+  if (text === 'permission') { permission = true; paint(webApproval); return; }
   if (text === 'question') { permission = true; paint('╭─ Ask ─╮\nAllow for this conversation\n› 1 Allow for this conversation\n  2 No\n↑↓ move · 1-2 select · Enter send\n'); return; }
   if (text === 'confirm-rule') { permission = true; paint('╭─ ◆ Save permission rule ─╮\nAlways allow matching actions?\nEnter select · Esc cancel\n'); return; }
   if (text === 'unknown-dialog') { permission = true; paint('Unknown approval dialog\nPress 1 to continue\n'); return; }
