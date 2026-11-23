@@ -58,8 +58,15 @@ export function terminalScreen(text) {
   const mode = /[│|]\s*(Auto|Ask|Manual|Full|Plan)\s*[│|]/.exec(footer)?.[1];
   // A rejected submission (usage limit, auth, provider error) ends in MCode's
   // error status line above the composer, which holds the restored draft.
-  const errorAt = prompt < 2 ? -1 : lines.findLastIndex((line, index) => index < prompt - 1 && /^\s*×\s+Error\s+·\s/.test(line));
-  const error = errorAt === -1 || prompt - errorAt > 8 ? undefined : lines.slice(errorAt, prompt - 2).join(' ').replace(/^\s*×\s+Error\s+·\s+/, '').replace(/\s+/g, ' ').trim();
+  // MCode 0.7.x prints "× Error  <text>" (older builds "× Error · <text>"), and a
+  // task panel can sit between the error block and the composer: it is not counted.
+  const errorHead = /^\s*×\s+Error(?:\s+·)?\s+\S/;
+  const panelLine = (line) => /^\s*(?:[✓●○◐]\s|… \+\d+ more|■ Tasks)/.test(line);
+  const errorAt = prompt < 2 ? -1 : lines.findLastIndex((line, index) => index < prompt - 1 && errorHead.test(line));
+  const errorGap = errorAt === -1 ? 0 : prompt - errorAt - lines.slice(errorAt, prompt).filter(panelLine).length;
+  const blankAfter = errorAt === -1 ? -1 : lines.findIndex((line, index) => index > errorAt && line.trim() === '');
+  const errorEnd = blankAfter === -1 ? prompt - 2 : Math.min(blankAfter, prompt - 2);
+  const error = errorAt === -1 || errorGap > 8 ? undefined : lines.slice(errorAt, errorEnd).join(' ').replace(/^\s*×\s+Error(?:\s+·)?\s+/, '').replace(/\s+/g, ' ').trim();
   return { kind: working ? 'working' : prompt !== -1 && /(?:Message · Enter send|Start · @ file|Context .*|Effort .*|Permissions)/.test(body) && !/Starting server|Checking account/.test(body) ? 'idle' : 'unknown', text: body,
     ...(!working && error ? { error } : {}),
     ...(mode ? { mode: { Auto: 'auto', Ask: 'manual', Manual: 'manual', Full: 'bypassPermissions', Plan: 'plan' }[mode] } : {}) };

@@ -454,3 +454,20 @@ test('explains provider and network failures instead of echoing the raw error', 
   assert.equal(describeFailure('Something odd happened'), undefined);
   assert.equal(describeFailure(undefined), undefined);
 });
+
+test('reads the error MCode 0.7 prints without a dot and above a task panel', () => {
+  const rule = '    ' + '─'.repeat(40);
+  const screen = [
+    '   › continue', '', '',
+    '    × Error  The model provider is temporarily unavailable.',
+    '    Code: 50113',
+    '    Run /retry to resend your last message. Your prompt is preserved.', '',
+    '    ✓ Собрать подпись HMAC-SHA256', '    ● QR-логин: ждём сканирования', '    ○ Выкачать список сообщений',
+    '    … +4 more · 4/7 done · 2 pending · Ctrl+T expand', '  ■ Tasks · 1 cancelled · /tasks details',
+    '    Message · Enter send · Ctrl+J newline', rule, '  ›  Ask Mcode to do anything', rule, '',
+    '  keenetic-sync │ Auto │ M3.1-Flash · Effort default │ Context 47% left'].join('\n');
+  const shown = terminalScreen(screen);
+  assert.equal(shown.kind, 'idle');
+  assert.equal(shown.error, 'The model provider is temporarily unavailable. Code: 50113 Run /retry to resend your last message. Your prompt is preserved.');
+  assert.match(describeFailure(shown.error), /MiniMax service is unavailable \(Code: 50113\)/);
+});
