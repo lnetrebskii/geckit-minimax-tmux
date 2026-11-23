@@ -511,6 +511,22 @@ var providerRow = (session) => ({
   ...session.effective_model ? { model: session.effective_model } : {}
 });
 
+// src/mcode-failure.mjs
+var PROVIDER_DOWN = /temporarily unavailable|service unavailable|overloaded|bad gateway|gateway time-?out|internal server error/i;
+var NETWORK_DOWN = /network|timed? ?out|timeout|ECONN\w*|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|unreachable/i;
+var STALL_AFTER_MS = 12e4;
+var stallNote = "MiniMax has not answered for 2 minutes. The MiniMax service or this computer's connection to it may be down. If it stays like this, stop the turn and try again later.";
+function describeFailure(text) {
+  if (typeof text !== "string" || !text.trim()) return void 0;
+  const raw = text.replace(/\s+/g, " ").trim();
+  const code = /\bCode:\s*(\d{3,6})\b/i.exec(raw)?.[1];
+  const tag = code ? ` (Code: ${code})` : "";
+  if (PROVIDER_DOWN.test(raw)) return `The MiniMax service is unavailable${tag}. This is a problem on the provider's side, not with your message. Wait a few minutes and resend it.`;
+  if (NETWORK_DOWN.test(raw)) return `MiniMax Code could not reach the MiniMax service${tag}. Check this computer's internet connection, VPN or proxy, then resend your message.`;
+  if (code) return `MiniMax Code reported an error${tag}: ${raw.slice(0, 200)}`;
+  return void 0;
+}
+
 // src/mcode-state.mjs
 import { isAbsolute as isAbsolute2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -666,6 +682,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
   let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing, awaitingEcho = false;
   let permissionMode = options.mode;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = /* @__PURE__ */ new Map(), baseline = /* @__PURE__ */ new Set();
+  let progressAt = Date.now(), stalled = false;
   let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = /* @__PURE__ */ new Map();
   const sentMessages = /* @__PURE__ */ new Set();
   const emit = (items = [], gone = [], signals = []) => {
@@ -716,6 +733,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     const gone = [...previous.keys()].filter((id) => !current.has(id));
     if (turn && saved.some((message) => !baseline.has(message.msg_id))) activity = true;
     const spend = contextSpend(saved);
+    if (changed.length || gone.length || items.some((item) => item.kind === "did" && item.live)) progressAt = Date.now();
     emit(changed, gone, spend ? [{ kind: "spend", ...spend }] : []);
     const doing = changed.findLast((item) => item.kind === "did" && item.live);
     if (doing) emit([], [], [{ kind: "doing", what: doing.what }]);
@@ -757,8 +775,10 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     idle = 0;
     awaitingEcho = false;
     if (how === "signedOut") emit([{ kind: "note", id: `mcode-signin:${randomUUID3()}`, note: "failed", text: loginInstruction }]);
+    const why = how === "failed" ? describeFailure(text) : void 0;
+    if (why) emit([{ kind: "note", id: `mcode-failure:${randomUUID3()}`, note: "failed", text: why }]);
     emit([], [], [{ kind: "ended", how, ...text ? { text } : {} }]);
-    log("info", "session.turn.ended", { session: options.id, outcome: how });
+    log("info", "session.turn.ended", { session: options.id, outcome: how, ...text ? { error: String(text).slice(0, 300) } : {} });
   };
   const close = () => {
     if (closing) return closing;
@@ -799,6 +819,14 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
     const saved = await refresh();
     await refreshState();
     const shown = await screen();
+    if (!turn) {
+      progressAt = Date.now();
+      stalled = false;
+    } else if (!stalled && !stopping && shown.kind !== "question" && Date.now() - progressAt > STALL_AFTER_MS) {
+      stalled = true;
+      emit([{ kind: "note", id: `mcode-stall:${randomUUID3()}`, note: "failed", text: stallNote }]);
+      log("warn", "session.turn.stalled", { session: options.id, seconds: Math.round((Date.now() - progressAt) / 1e3) });
+    }
     if (turn && shown.kind === "unknown") await requireLogin();
     if (shown.mode && shown.mode !== actualMode) {
       actualMode = shown.mode;
@@ -818,6 +846,7 @@ function holdMcode({ rpc, options, hear, left, guide = async () => "", log = () 
           return;
         }
       }
+      progressAt = Date.now();
       showQuestion(shown);
       return;
     }

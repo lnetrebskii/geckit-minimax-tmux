@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { create } from '../index.mjs';
 import { holdMcode, terminalScreen } from '../src/mcode-terminal.mjs';
 import { nativeId, messageItems, contextSpend, messages, messageLinks } from '../src/mcode-history.mjs';
+import { describeFailure } from '../src/mcode-failure.mjs';
 import { McodeRpc } from '../src/mcode-rpc.mjs';
 import { parseQuota, quotaDuration, quotaReader } from '../src/mcode-quota.mjs';
 
@@ -444,4 +445,12 @@ test('approval confirmation forms have one title and preserve native evidence an
   assert.equal(deny.detail, '$ cat file | sort');
   assert.equal(deny.input, true);
   assert.deepEqual(deny.options.map((one) => one.keys), [['Enter'], ['Escape']]);
+});
+
+test('explains provider and network failures instead of echoing the raw error', () => {
+  assert.match(describeFailure('The model provider is temporarily unavailable. Code: 50113 Run /retry to resend your last message.'), /MiniMax service is unavailable \(Code: 50113\).*provider's side/);
+  assert.match(describeFailure('fetch failed: ETIMEDOUT'), /could not reach the MiniMax service/);
+  assert.match(describeFailure('Something odd. Code: 51234'), /reported an error \(Code: 51234\)/);
+  assert.equal(describeFailure('Something odd happened'), undefined);
+  assert.equal(describeFailure(undefined), undefined);
 });

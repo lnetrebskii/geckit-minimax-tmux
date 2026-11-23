@@ -8,6 +8,7 @@ import { findTmux } from './tmux-binary.mjs';
 import { createLogin } from './mcode-login.mjs';
 import { mcodeCommand, mcodeEnvironment } from './mcode-rpc.mjs';
 import { messageItemsWithImages, contextSpend, messages, API, namespaced } from './mcode-history.mjs';
+import { describeFailure, STALL_AFTER_MS, stallNote } from './mcode-failure.mjs';
 import { backgroundTasks, stopTask, selectedModel, usesKey, efforts } from './mcode-state.mjs';
 
 const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -98,6 +99,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
   let checking = false, imagesDirectory, launchDirectory, wanted, applying, closing, awaitingEcho = false;
   let permissionMode = options.mode;
   let serial = Promise.resolve(), activity = false, idle = 0, pending, previous = new Map(), baseline = new Set();
+  let progressAt = Date.now(), stalled = false;
   let stateAt = 0, actualModel, actualEffort, actualMode, taskStates = new Map();
   const sentMessages = new Set();
   const emit = (items = [], gone = [], signals = []) => { if (!closed) hear({ items, gone, signals }); };
@@ -142,6 +144,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
     const gone = [...previous.keys()].filter((id) => !current.has(id));
     if (turn && saved.some((message) => !baseline.has(message.msg_id))) activity = true;
     const spend = contextSpend(saved);
+    if (changed.length || gone.length || items.some((item) => item.kind === 'did' && item.live)) progressAt = Date.now();
     emit(changed, gone, spend ? [{ kind: 'spend', ...spend }] : []);
     const doing = changed.findLast(item => item.kind === 'did' && item.live);
     if (doing) emit([], [], [{ kind: 'doing', what: doing.what }]);
@@ -174,8 +177,10 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
     if (!turn) return;
     turn = false; stopping = false; idle = 0; awaitingEcho = false;
     if (how === 'signedOut') emit([{ kind: 'note', id: `mcode-signin:${randomUUID()}`, note: 'failed', text: loginInstruction }]);
+    const why = how === 'failed' ? describeFailure(text) : undefined;
+    if (why) emit([{ kind: 'note', id: `mcode-failure:${randomUUID()}`, note: 'failed', text: why }]);
     emit([], [], [{ kind: 'ended', how, ...(text ? { text } : {}) }]);
-    log('info', 'session.turn.ended', { session: options.id, outcome: how });
+    log('info', 'session.turn.ended', { session: options.id, outcome: how, ...(text ? { error: String(text).slice(0, 300) } : {}) });
   };
   const close = () => {
     if (closing) return closing;
@@ -204,6 +209,12 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
     const saved = await refresh();
     await refreshState();
     const shown = await screen();
+    if (!turn) { progressAt = Date.now(); stalled = false; }
+    else if (!stalled && !stopping && shown.kind !== 'question' && Date.now() - progressAt > STALL_AFTER_MS) {
+      stalled = true;
+      emit([{ kind: 'note', id: `mcode-stall:${randomUUID()}`, note: 'failed', text: stallNote }]);
+      log('warn', 'session.turn.stalled', { session: options.id, seconds: Math.round((Date.now() - progressAt) / 1000) });
+    }
     if (turn && shown.kind === 'unknown') await requireLogin();
     if (shown.mode && shown.mode !== actualMode) { actualMode = shown.mode; emit([], [], [{ kind: 'mode', mode: actualMode }]); }
     if (shown.mode && !wanted) permissionMode = shown.mode;
@@ -219,6 +230,7 @@ export function holdMcode({ rpc, options, hear, left, guide = async () => '', lo
           return;
         }
       }
+      progressAt = Date.now();
       showQuestion(shown); return;
     }
     resolveQuestion();
